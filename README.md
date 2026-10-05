@@ -138,7 +138,6 @@ cd temp_garbha-dress_site
      CITY_DEFAULT: 'Indore'
    };
    ```
-2. Open [`booking-api-client.js`](./booking-api-client.js) and update `API_BASE_URL` with the same URL.
 
 ---
 
