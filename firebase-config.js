@@ -319,6 +319,7 @@ export async function createOrderInFirestore(orderInput, currentUser) {
     const localOrders = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
     localOrders.unshift(orderDocument);
     localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
+    window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
     return orderDocument;
   }
 
@@ -353,6 +354,7 @@ export async function submitOrderUtr(orderId, rawUtr) {
       localOrders[idx].utrNumber = cleanUtr;
       localOrders[idx].status = 'Payment Submitted';
       localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
+      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
       return localOrders[idx];
     }
     throw new Error('Order not found in local records.');
@@ -387,6 +389,7 @@ export async function verifyAndDispatchOrder(order) {
       localOrders[idx].paymentVerified = true;
       localOrders[idx].dispatched = true;
       localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
+      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
     }
   } else {
     const orderRef = doc(db, 'orders', orderId);
@@ -429,6 +432,7 @@ export async function returnAndRestockOrder(order) {
       localOrders[idx].status = 'Returned';
       localOrders[idx].returned = true;
       localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
+      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
     }
   } else {
     const orderRef = doc(db, 'orders', orderId);
@@ -456,15 +460,85 @@ export async function returnAndRestockOrder(order) {
 // 7. REAL-TIME ORDERS LISTENER (FOR SELLER DASHBOARD & CUSTOMER ORDERS)
 // --------------------------------------------------------------------------
 
+// Realistic Seed Orders for Demonstration
+function getSeedOrders() {
+  return [
+    {
+      orderId: "ORD-NV2101",
+      customerUid: "demo_cust_guest",
+      customerName: "Pooja Sharma",
+      phone: "9826012345",
+      city: "Indore",
+      address: "Flat 302, Silver Springs, AB Road",
+      dressCode: "032026/2101",
+      dressTitle: "Navratri Special Kutchi Rabari Lehenga",
+      orderType: "RENT",
+      startDate: "2026-10-12",
+      endDate: "2026-10-14",
+      rentalDays: 3,
+      rentOrBuyAmount: 2397,
+      securityDeposit: 1500,
+      totalPayable: 3897,
+      status: "Payment Submitted",
+      utrNumber: "428190382910",
+      paymentVerified: false,
+      dispatched: false,
+      createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
+    },
+    {
+      orderId: "ORD-KD2105",
+      customerUid: "demo_cust_2",
+      customerName: "Rahul Verma",
+      phone: "9893054321",
+      city: "Indore",
+      address: "14/2 Scheme 54, Vijay Nagar",
+      dressCode: "032026/2105",
+      dressTitle: "Men's Royal Angrakha Kediyu Set",
+      orderType: "RENT",
+      startDate: "2026-10-10",
+      endDate: "2026-10-11",
+      rentalDays: 2,
+      rentOrBuyAmount: 1298,
+      securityDeposit: 1000,
+      totalPayable: 2298,
+      status: "Verified & Dispatched",
+      utrNumber: "519283746102",
+      paymentVerified: true,
+      dispatched: true,
+      createdAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+    }
+  ];
+}
+
 /**
  * Listen to all orders for the Seller Dashboard
  */
 export function subscribeToAllOrders(callback) {
   if (!isFirebaseConfigured()) {
-    const getLocal = () => JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    callback(getLocal());
-    window.addEventListener('storage', () => callback(getLocal()));
-    return () => {};
+    const getLocal = () => {
+      const stored = localStorage.getItem('kissa_orders');
+      if (!stored) {
+        const seed = getSeedOrders();
+        localStorage.setItem('kissa_orders', JSON.stringify(seed));
+        return seed;
+      }
+      try {
+        return JSON.parse(stored);
+      } catch (err) {
+        return [];
+      }
+    };
+
+    const notify = () => callback(getLocal());
+    notify();
+
+    window.addEventListener('storage', notify);
+    window.addEventListener('kissa_orders_updated', notify);
+
+    return () => {
+      window.removeEventListener('storage', notify);
+      window.removeEventListener('kissa_orders_updated', notify);
+    };
   }
 
   const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(50));

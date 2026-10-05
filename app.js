@@ -299,8 +299,12 @@ function setupEventListeners() {
   // Booking Modal Close
   const modalBackdrop = document.getElementById('bookingModalBackdrop');
   const closeModalBtn = document.getElementById('closeModalBtn');
+  const orderSuccessDoneBtn = document.getElementById('orderSuccessDoneBtn');
   if (closeModalBtn && modalBackdrop) {
     closeModalBtn.addEventListener('click', closeBookingModal);
+    if (orderSuccessDoneBtn) {
+      orderSuccessDoneBtn.addEventListener('click', closeBookingModal);
+    }
     modalBackdrop.addEventListener('click', (e) => {
       if (e.target === modalBackdrop) {
         closeBookingModal();
@@ -502,10 +506,35 @@ function setupEventListeners() {
   const ordersListEl = document.getElementById('sellerOrdersList');
   if (ordersListEl) {
     ordersListEl.addEventListener('click', async (e) => {
+      // Handle 1-click switch to Seller from warning banner
+      const switchSellerBtn = e.target.closest('#sellerHubSwitchSellerBtn');
+      if (switchSellerBtn) {
+        const demoSeller = {
+          uid: 'demo_seller_admin',
+          displayName: 'Kissa Admin (Seller)',
+          email: 'admin@kissa.in',
+          phone: '8839395472',
+          role: 'seller'
+        };
+        localStorage.setItem('kissa_user', JSON.stringify(demoSeller));
+        state.currentUser = demoSeller;
+        updateAuthHeaderUI(demoSeller);
+        renderSellerOrders(state.allOrdersCache);
+        showToast('Switched to Seller role with dispatch authority!');
+        return;
+      }
+
       const verifyBtn = e.target.closest('.verify-dispatch-btn');
       const returnBtn = e.target.closest('.mark-returned-btn');
 
       if (verifyBtn) {
+        // Strict RBAC: Only verified sellers can verify payment & dispatch
+        if (!state.currentUser || state.currentUser.role !== 'seller') {
+          showToast('🔒 Access Denied: Only authenticated Sellers can verify payments & dispatch orders. Please switch to "👑 Demo Seller".');
+          openAuthModal();
+          return;
+        }
+
         const orderId = verifyBtn.dataset.orderId;
         const order = state.allOrdersCache.find(o => o.orderId === orderId);
         if (order) {
@@ -522,6 +551,13 @@ function setupEventListeners() {
       }
 
       if (returnBtn) {
+        // Strict RBAC: Only sellers can mark returned & initiate refund
+        if (!state.currentUser || state.currentUser.role !== 'seller') {
+          showToast('🔒 Access Denied: Only authenticated Sellers can mark outfits returned.');
+          openAuthModal();
+          return;
+        }
+
         const orderId = returnBtn.dataset.orderId;
         const order = state.allOrdersCache.find(o => o.orderId === orderId);
         if (order) {
@@ -759,10 +795,22 @@ async function handleAutomatedOrderSubmit(e) {
   const city = document.getElementById('custCity').value.trim() || CONFIG.CITY_DEFAULT;
   const address = document.getElementById('custAddress').value.trim();
 
+  // Validate customer name
+  if (!name || name.length < 2) {
+    showToast('Please enter your full name (minimum 2 characters).');
+    return;
+  }
+
   // Validate phone number
   const phoneClean = phone.replace(/\D/g, '');
   if (phoneClean.length !== 10 || !/^[6-9]/.test(phoneClean)) {
     showToast('Please enter a valid 10-digit Indian mobile number.');
+    return;
+  }
+
+  // Validate delivery address
+  if (!address || address.length < 5) {
+    showToast('Please enter your complete doorstep delivery address.');
     return;
   }
 
@@ -949,8 +997,19 @@ function renderSellerOrders(orders) {
   if (pendingCountEl) pendingCountEl.textContent = pending;
   if (dispatchedCountEl) dispatchedCountEl.textContent = dispatched;
 
+  const isSellerUser = state.currentUser && state.currentUser.role === 'seller';
+  let bannerHtml = '';
+  if (!isSellerUser) {
+    bannerHtml = `
+      <div style="background:#FFFBEB; border:1px solid #FCD34D; color:#92400E; padding:10px 14px; border-radius:8px; font-size:12px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <span>🔒 <strong>Read-Only Mode:</strong> You are viewing as <em>${sanitize(state.currentUser?.displayName || 'Customer / Guest')}</em>. To test seller verification and WhatsApp dispatch, switch to Seller role.</span>
+        <button type="button" id="sellerHubSwitchSellerBtn" style="background:#D97706; color:#FFF; border:none; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; cursor:pointer;">👑 Switch to Demo Seller</button>
+      </div>
+    `;
+  }
+
   if (orders.length === 0) {
-    container.innerHTML = `
+    container.innerHTML = bannerHtml + `
       <div class="empty-orders-view">
         <p style="font-size:16px; font-weight:600; margin-bottom:4px;">No orders found</p>
         <p style="font-size:13px;">New bookings will appear here automatically in real-time.</p>
@@ -959,10 +1018,11 @@ function renderSellerOrders(orders) {
     return;
   }
 
-  container.innerHTML = orders.map(order => {
+  container.innerHTML = bannerHtml + orders.map(order => {
     const isDispatched = order.status === 'Verified & Dispatched' || order.dispatched;
     const isReturned = order.status === 'Returned';
     const hasUtr = Boolean(order.utrNumber && order.utrNumber.trim() !== '');
+    const phoneDigits = String(order.phone || '').replace(/\D/g, '');
 
     let badgeClass = 'pending-payment';
     if (order.status === 'Payment Submitted') badgeClass = 'payment-submitted';
@@ -989,8 +1049,8 @@ function renderSellerOrders(orders) {
             <span class="detail-title">Customer</span>
             <span class="detail-main">${sanitize(order.customerName)}</span>
             <span class="detail-sub">
-              📞 <a href="tel:${sanitize(order.phone)}" style="color:var(--crimson); text-decoration:none;">${sanitize(order.phone)}</a>
-              · <a href="https://wa.me/91${sanitize(order.phone)}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">Chat</a>
+              📞 <a href="tel:${phoneDigits}" style="color:var(--crimson); text-decoration:none;">${phoneDigits}</a>
+              · <a href="https://wa.me/91${phoneDigits}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">Chat</a>
             </span>
             <span class="detail-sub" style="margin-top:2px;">📍 ${sanitize(order.address)}, ${sanitize(order.city || 'Indore')}</span>
           </div>
