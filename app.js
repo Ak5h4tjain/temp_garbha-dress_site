@@ -4,14 +4,31 @@
  * ==========================================================================
  * 
  * Features:
- *  - Automated direct order creation into Google Sheets & Telegram
+ *  - Firebase Authentication (Google OAuth, Email/Password, RBAC Demo Switchers)
+ *  - Zero-Trust Anti-Price-Tampering Order Creation via Cloud Firestore
  *  - Rent vs. Buy toggle with dynamic pricing & deposit logic
  *  - Instant UPI QR Code & Direct UPI payment app links (GPay/PhonePe/Paytm)
+ *  - 12-Digit UTR (UPI Reference Number) Submission & Tracking
+ *  - Real-time Seller Admin Hub with 1-tap WhatsApp Verification & Dispatch
  *  - Real-time date availability checking via Apps Script doGet
- *  - WhatsApp screenshot verification shortcut
  */
 
 import { PRODUCTS } from './products.js';
+import {
+  isFirebaseConfigured,
+  OFFICIAL_PRICING_MAP,
+  SELLER_ADMIN_EMAIL,
+  loginWithGoogle,
+  loginWithEmail,
+  registerWithEmail,
+  logoutUser,
+  subscribeToAuthState,
+  createOrderInFirestore,
+  submitOrderUtr,
+  verifyAndDispatchOrder,
+  returnAndRestockOrder,
+  subscribeToAllOrders
+} from './firebase-config.js';
 
 // --------------------------------------------------------------------------
 // CONFIGURATION
@@ -20,7 +37,7 @@ export const CONFIG = {
   // Published Google Apps Script Web App exec URL
   APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyyaAlw00M3Medz47m5j65IytEQoSdQJp5J8BprSXpPuGknUORr7nMC67D1nsyKZSyIZQ/exec',
 
-  // Admin WhatsApp business number for payment verification
+  // Admin WhatsApp business number for customer contact & fallback
   WHATSAPP_PHONE: '918839395472',
 
   // Admin UPI ID for direct QR code generation
@@ -39,7 +56,11 @@ const state = {
   activeProduct: null,
   orderType: 'RENT', // 'RENT' or 'BUY'
   bookedDatesCache: {},
-  soldDresses: []
+  soldDresses: [],
+  currentUser: null,
+  currentOrderId: null,
+  currentOrderDoc: null,
+  allOrdersCache: []
 };
 
 // --------------------------------------------------------------------------
@@ -49,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderProductGrid();
   setupEventListeners();
   prefetchInventoryAvailability();
+  initializeAuthAndOrderStreams();
 });
 
 // --------------------------------------------------------------------------
@@ -75,6 +97,57 @@ function getTodayIsoString() {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+// --------------------------------------------------------------------------
+// AUTHENTICATION & STREAM LISTENERS
+// --------------------------------------------------------------------------
+function initializeAuthAndOrderStreams() {
+  // Listen for login/logout changes
+  subscribeToAuthState((user) => {
+    state.currentUser = user;
+    updateAuthHeaderUI(user);
+
+    // If customer has filled profile, pre-populate order form
+    if (user) {
+      const nameInput = document.getElementById('custName');
+      const phoneInput = document.getElementById('custPhone');
+      if (nameInput && !nameInput.value && user.displayName) {
+        nameInput.value = user.displayName;
+      }
+      if (phoneInput && !phoneInput.value && user.phone) {
+        phoneInput.value = user.phone;
+      }
+    }
+  });
+
+  // Listen for live orders (Seller Hub & real-time updates)
+  subscribeToAllOrders((orders) => {
+    state.allOrdersCache = orders || [];
+    renderSellerOrders(state.allOrdersCache);
+  });
+}
+
+function updateAuthHeaderUI(user) {
+  const authBtn = document.getElementById('headerAuthBtn');
+  const profileBadge = document.getElementById('userProfileBadge');
+  const roleBadge = document.getElementById('userRoleBadge');
+  const nameDisplay = document.getElementById('userNameDisplay');
+
+  if (!authBtn || !profileBadge) return;
+
+  if (user) {
+    authBtn.style.display = 'none';
+    profileBadge.style.display = 'flex';
+    nameDisplay.textContent = user.displayName || user.email || 'Customer';
+
+    const isSeller = user.role === 'seller';
+    roleBadge.textContent = isSeller ? '👑 Seller' : '👤 Customer';
+    roleBadge.className = 'user-role-tag ' + (isSeller ? 'seller' : 'customer');
+  } else {
+    authBtn.style.display = 'flex';
+    profileBadge.style.display = 'none';
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -208,7 +281,7 @@ function setupEventListeners() {
     });
   }
 
-  // Open Modal Delegate
+  // Open Booking Modal Delegate
   const gridEl = document.getElementById('productGrid');
   if (gridEl) {
     gridEl.addEventListener('click', (e) => {
@@ -223,7 +296,7 @@ function setupEventListeners() {
     });
   }
 
-  // Modal Close
+  // Booking Modal Close
   const modalBackdrop = document.getElementById('bookingModalBackdrop');
   const closeModalBtn = document.getElementById('closeModalBtn');
   if (closeModalBtn && modalBackdrop) {
@@ -236,8 +309,10 @@ function setupEventListeners() {
   }
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modalBackdrop.classList.contains('active')) {
-      closeBookingModal();
+    if (e.key === 'Escape') {
+      if (modalBackdrop && modalBackdrop.classList.contains('active')) closeBookingModal();
+      closeAuthModal();
+      closeSellerModal();
     }
   });
 
@@ -262,10 +337,239 @@ function setupEventListeners() {
     });
   }
 
-  // Automated Order Submission
+  // Automated Zero-Trust Order Submission Form
   const bookingForm = document.getElementById('bookingForm');
   if (bookingForm) {
     bookingForm.addEventListener('submit', handleAutomatedOrderSubmit);
+  }
+
+  // 12-Digit UTR Submission Listener
+  const submitUtrBtn = document.getElementById('submitUtrBtn');
+  const custUtrInput = document.getElementById('custUtrInput');
+  if (submitUtrBtn) {
+    submitUtrBtn.addEventListener('click', handleUtrSubmission);
+  }
+  if (custUtrInput) {
+    custUtrInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleUtrSubmission();
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // AUTHENTICATION MODAL CONTROLS
+  // ------------------------------------------------------------------------
+  const headerAuthBtn = document.getElementById('headerAuthBtn');
+  const authModal = document.getElementById('authModal');
+  const closeAuthModalBtn = document.getElementById('closeAuthModalBtn');
+  const tabSignInBtn = document.getElementById('tabSignInBtn');
+  const tabSignUpBtn = document.getElementById('tabSignUpBtn');
+  const googleAuthBtn = document.getElementById('googleAuthBtn');
+  const authEmailForm = document.getElementById('authEmailForm');
+  const quickDemoCustBtn = document.getElementById('quickDemoCustBtn');
+  const quickDemoSellerBtn = document.getElementById('quickDemoSellerBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  if (headerAuthBtn) {
+    headerAuthBtn.addEventListener('click', openAuthModal);
+  }
+  if (closeAuthModalBtn && authModal) {
+    closeAuthModalBtn.addEventListener('click', closeAuthModal);
+    authModal.addEventListener('click', (e) => {
+      if (e.target === authModal) closeAuthModal();
+    });
+  }
+
+  let authMode = 'signin';
+  if (tabSignInBtn && tabSignUpBtn) {
+    tabSignInBtn.addEventListener('click', () => {
+      authMode = 'signin';
+      tabSignInBtn.classList.add('active');
+      tabSignUpBtn.classList.remove('active');
+      document.getElementById('signUpFields').style.display = 'none';
+      document.getElementById('authModalTitle').textContent = 'Sign In to Kissa';
+      document.getElementById('authSubmitBtn').querySelector('span').textContent = 'Sign In';
+    });
+
+    tabSignUpBtn.addEventListener('click', () => {
+      authMode = 'signup';
+      tabSignUpBtn.classList.add('active');
+      tabSignInBtn.classList.remove('active');
+      document.getElementById('signUpFields').style.display = 'block';
+      document.getElementById('authModalTitle').textContent = 'Create Kissa Account';
+      document.getElementById('authSubmitBtn').querySelector('span').textContent = 'Create Account';
+    });
+  }
+
+  if (googleAuthBtn) {
+    googleAuthBtn.addEventListener('click', async () => {
+      try {
+        const user = await loginWithGoogle();
+        closeAuthModal();
+        showToast(`Welcome, ${user.displayName || 'Customer'}!`);
+      } catch (err) {
+        showToast('Google Sign-In failed: ' + err.message);
+      }
+    });
+  }
+
+  if (authEmailForm) {
+    authEmailForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('authEmail').value.trim();
+      const password = document.getElementById('authPassword').value;
+
+      try {
+        if (authMode === 'signup') {
+          const name = document.getElementById('authName').value.trim() || 'Customer';
+          const phone = document.getElementById('authPhone').value.trim();
+          await registerWithEmail(name, email, password, phone, 'customer');
+          showToast(`Account created! Welcome, ${name}.`);
+        } else {
+          const user = await loginWithEmail(email, password);
+          showToast(`Welcome back, ${user.displayName || user.email}!`);
+        }
+        closeAuthModal();
+      } catch (err) {
+        showToast('Authentication error: ' + err.message);
+      }
+    });
+  }
+
+  if (quickDemoCustBtn) {
+    quickDemoCustBtn.addEventListener('click', () => {
+      const demoUser = {
+        uid: 'demo_cust_guest',
+        displayName: 'Aarav Patel (Customer)',
+        email: 'aarav@gmail.com',
+        phone: '9876543210',
+        role: 'customer'
+      };
+      localStorage.setItem('kissa_user', JSON.stringify(demoUser));
+      state.currentUser = demoUser;
+      updateAuthHeaderUI(demoUser);
+      closeAuthModal();
+      showToast('Switched to Demo Customer profile.');
+    });
+  }
+
+  if (quickDemoSellerBtn) {
+    quickDemoSellerBtn.addEventListener('click', () => {
+      const demoSeller = {
+        uid: 'demo_seller_admin',
+        displayName: 'Kissa Admin (Seller)',
+        email: 'admin@kissa.in',
+        phone: '8839395472',
+        role: 'seller'
+      };
+      localStorage.setItem('kissa_user', JSON.stringify(demoSeller));
+      state.currentUser = demoSeller;
+      updateAuthHeaderUI(demoSeller);
+      closeAuthModal();
+      showToast('Switched to Demo Seller (Admin) mode!');
+    });
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      await logoutUser();
+      state.currentUser = null;
+      updateAuthHeaderUI(null);
+      showToast('Signed out successfully.');
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // SELLER ADMIN HUB CONTROLS
+  // ------------------------------------------------------------------------
+  const sellerToggleBtn = document.getElementById('sellerPortalToggleBtn');
+  const sellerModal = document.getElementById('sellerPortalModal');
+  const closeSellerModalBtn = document.getElementById('closeSellerModalBtn');
+
+  if (sellerToggleBtn) {
+    sellerToggleBtn.addEventListener('click', openSellerModal);
+  }
+  if (closeSellerModalBtn && sellerModal) {
+    closeSellerModalBtn.addEventListener('click', closeSellerModal);
+    sellerModal.addEventListener('click', (e) => {
+      if (e.target === sellerModal) closeSellerModal();
+    });
+  }
+
+  // Seller card action clicks (Verify & Dispatch or Mark Returned)
+  const ordersListEl = document.getElementById('sellerOrdersList');
+  if (ordersListEl) {
+    ordersListEl.addEventListener('click', async (e) => {
+      const verifyBtn = e.target.closest('.verify-dispatch-btn');
+      const returnBtn = e.target.closest('.mark-returned-btn');
+
+      if (verifyBtn) {
+        const orderId = verifyBtn.dataset.orderId;
+        const order = state.allOrdersCache.find(o => o.orderId === orderId);
+        if (order) {
+          verifyBtn.disabled = true;
+          verifyBtn.innerHTML = '<span>⏳ Verifying & Launching WhatsApp...</span>';
+          try {
+            await verifyAndDispatchOrder(order);
+            showToast(`Order ${orderId} verified and dispatched!`);
+          } catch (err) {
+            showToast('Dispatch failed: ' + err.message);
+            verifyBtn.disabled = false;
+          }
+        }
+      }
+
+      if (returnBtn) {
+        const orderId = returnBtn.dataset.orderId;
+        const order = state.allOrdersCache.find(o => o.orderId === orderId);
+        if (order) {
+          returnBtn.disabled = true;
+          returnBtn.innerHTML = '<span>⏳ Processing Return...</span>';
+          try {
+            await returnAndRestockOrder(order);
+            showToast(`Outfit marked returned & deposit refund triggered.`);
+          } catch (err) {
+            showToast('Return error: ' + err.message);
+            returnBtn.disabled = false;
+          }
+        }
+      }
+    });
+  }
+}
+
+function openAuthModal() {
+  const modal = document.getElementById('authModal');
+  if (modal) {
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+  }
+}
+
+function closeAuthModal() {
+  const modal = document.getElementById('authModal');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function openSellerModal() {
+  const modal = document.getElementById('sellerPortalModal');
+  if (modal) {
+    modal.classList.add('active');
+    modal.setAttribute('aria-hidden', 'false');
+    renderSellerOrders(state.allOrdersCache);
+  }
+}
+
+function closeSellerModal() {
+  const modal = document.getElementById('sellerPortalModal');
+  if (modal) {
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
   }
 }
 
@@ -314,7 +618,7 @@ function openBookingModal(product) {
 
 function closeBookingModal() {
   const backdrop = document.getElementById('bookingModalBackdrop');
-  backdrop.classList.remove('active');
+  if (backdrop) backdrop.classList.remove('active');
   document.body.style.overflow = '';
   state.activeProduct = null;
 }
@@ -375,9 +679,6 @@ function recalculateModalState() {
   const summaryText = document.getElementById('modalPricingSummaryText');
 
   if (isRent) {
-    // ----------------------------------------------------------------------
-    // RENT MODE
-    // ----------------------------------------------------------------------
     rentalDatesContainer.style.display = 'block';
     billDurationLine.style.display = 'flex';
     billDepositLine.style.display = 'flex';
@@ -430,9 +731,6 @@ function recalculateModalState() {
     document.getElementById('billGrandTotal').textContent = formatCurrency(grandTotal);
 
   } else {
-    // ----------------------------------------------------------------------
-    // BUY MODE (OUTRIGHT PURCHASE)
-    // ----------------------------------------------------------------------
     rentalDatesContainer.style.display = 'none';
     billDurationLine.style.display = 'none';
     billDepositLine.style.display = 'none';
@@ -447,7 +745,7 @@ function recalculateModalState() {
 }
 
 // --------------------------------------------------------------------------
-// AUTOMATED ORDER SUBMISSION TO BACKEND & TELEGRAM
+// ZERO-TRUST ORDER CREATION (ANTI-PRICE-TAMPERING)
 // --------------------------------------------------------------------------
 async function handleAutomatedOrderSubmit(e) {
   e.preventDefault();
@@ -471,26 +769,12 @@ async function handleAutomatedOrderSubmit(e) {
   const startStr = isRent ? document.getElementById('modalStartDate').value : null;
   const endStr = isRent ? document.getElementById('modalEndDate').value : null;
 
-  let days = 1;
-  let rentOrBuyAmount = p.buyPrice;
-  let deposit = 0;
-
-  if (isRent) {
-    const startDate = new Date(startStr + 'T00:00:00');
-    const endDate = new Date(endStr + 'T00:00:00');
-    days = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
-    rentOrBuyAmount = days * p.rentPerDay;
-    deposit = p.securityDeposit;
-  }
-
-  const totalPayable = rentOrBuyAmount + deposit;
-
   const submitBtn = document.getElementById('confirmWhatsAppBtn');
   submitBtn.disabled = true;
-  submitBtn.innerHTML = '<span>⏳ Placing Order in Database...</span>';
+  submitBtn.innerHTML = '<span>⏳ Locking Order in Database...</span>';
 
-  const orderPayload = {
-    action: 'create_order',
+  // Input for Firestore service layer (which recomputes prices authoritatively)
+  const orderInput = {
     customerName: name,
     phone: phoneClean,
     city: city,
@@ -498,68 +782,96 @@ async function handleAutomatedOrderSubmit(e) {
     dressCode: p.code,
     orderType: state.orderType,
     startDate: startStr,
-    endDate: endStr,
-    rentalDays: days,
-    rentOrBuyAmount: rentOrBuyAmount,
-    securityDeposit: deposit,
-    totalPayable: totalPayable
+    endDate: endStr
   };
 
   try {
-    // Direct call to Google Apps Script Web App
-    const res = await fetch(CONFIG.APPS_SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // Avoid CORS preflight in Apps Script
-      body: JSON.stringify(orderPayload)
-    });
+    // 1. Authoritative Firestore Order Creation
+    const orderDoc = await createOrderInFirestore(orderInput, state.currentUser);
+    state.currentOrderId = orderDoc.orderId;
+    state.currentOrderDoc = orderDoc;
 
-    const data = await res.json();
+    const upiLink = `upi://pay?pa=${CONFIG.ADMIN_UPI_ID}&pn=Kissa+Garbha&am=${orderDoc.totalPayable}&cu=INR&tn=Order+${orderDoc.orderId}`;
 
-    if (data.status === 'clash') {
-      showToast('⚠️ Clash: ' + data.message);
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = '<span>⚡ Place Order & Pay via UPI</span>';
-      return;
+    // 2. Also forward to Apps Script in background if available
+    if (CONFIG.APPS_SCRIPT_URL && !CONFIG.APPS_SCRIPT_URL.includes('YOUR_APPS_SCRIPT')) {
+      fetch(CONFIG.APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'create_order',
+          ...orderDoc
+        })
+      }).catch(err => console.warn('Background Apps Script sync:', err));
     }
 
-    const orderId = data.orderId || ('ORD-' + Date.now().toString(36).toUpperCase());
-    const upiLink = data.upiLink || `upi://pay?pa=${CONFIG.ADMIN_UPI_ID}&pn=Kissa+Garbha&am=${totalPayable}&cu=INR&tn=Order+${orderId}`;
-
-    // Switch Modal View to Success & Payment QR
+    // 3. Switch modal to Step 1 & Step 2 (QR Code & 12-Digit UTR Box)
     showOrderSuccessView({
-      orderId,
-      customerName: name,
-      phoneClean,
-      dressCode: p.code,
-      title: p.title,
-      orderType: state.orderType,
-      datesText: isRent ? `${startStr} to ${endStr} (${days} Nights)` : 'Outright Purchase',
-      totalPayable,
-      deposit,
-      upiLink
+      orderId: orderDoc.orderId,
+      customerName: orderDoc.customerName,
+      phoneClean: orderDoc.phone,
+      dressCode: orderDoc.dressCode,
+      title: orderDoc.dressTitle,
+      orderType: orderDoc.orderType,
+      datesText: isRent ? `${startStr} to ${endStr} (${orderDoc.rentalDays} Nights)` : 'Outright Purchase',
+      totalPayable: orderDoc.totalPayable,
+      deposit: orderDoc.securityDeposit,
+      upiLink: upiLink
     });
 
-    // Refresh inventory in background
     prefetchInventoryAvailability();
 
   } catch (err) {
-    console.error('Order submission error:', err);
-    // Even if fetch fails due to offline/strict network, generate fallback local order ID & QR
-    const fallbackOrderId = 'ORD-' + Date.now().toString(36).toUpperCase();
-    const fallbackUpi = `upi://pay?pa=${CONFIG.ADMIN_UPI_ID}&pn=Kissa+Garbha&am=${totalPayable}&cu=INR&tn=Order+${fallbackOrderId}`;
+    console.error('Order creation error:', err);
+    showToast('Order registration failed: ' + err.message);
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<span>⚡ Place Order & Pay via UPI</span>';
+  }
+}
 
-    showOrderSuccessView({
-      orderId: fallbackOrderId,
-      customerName: name,
-      phoneClean,
-      dressCode: p.code,
-      title: p.title,
-      orderType: state.orderType,
-      datesText: isRent ? `${startStr} to ${endStr} (${days} Nights)` : 'Outright Purchase',
-      totalPayable,
-      deposit,
-      upiLink: fallbackUpi
-    });
+// --------------------------------------------------------------------------
+// 12-DIGIT UTR SUBMISSION HANDLER
+// --------------------------------------------------------------------------
+async function handleUtrSubmission() {
+  if (!state.currentOrderId) {
+    showToast('Please place an order first before submitting UTR.');
+    return;
+  }
+
+  const utrInput = document.getElementById('custUtrInput');
+  const submitBtn = document.getElementById('submitUtrBtn');
+  const banner = document.getElementById('utrFeedbackBanner');
+
+  const rawUtr = utrInput.value.trim();
+  const cleanUtr = rawUtr.replace(/\D/g, '');
+
+  if (cleanUtr.length !== 12) {
+    banner.style.display = 'block';
+    banner.className = 'utr-feedback-banner error';
+    banner.innerHTML = '⚠️ Please enter the complete <strong>12-digit numeric UPI Reference / UTR Number</strong> from your payment receipt.';
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.innerHTML = '<span>⏳ Verifying...</span>';
+
+  try {
+    await submitOrderUtr(state.currentOrderId, cleanUtr);
+
+    banner.style.display = 'block';
+    banner.className = 'utr-feedback-banner success';
+    banner.innerHTML = `✅ <strong>UTR ${cleanUtr} Submitted!</strong> Seller has received your transaction details for verification and dispatch.`;
+
+    utrInput.disabled = true;
+    submitBtn.innerHTML = '<span>✅ Submitted</span>';
+    showToast('UTR registered successfully!');
+
+  } catch (err) {
+    banner.style.display = 'block';
+    banner.className = 'utr-feedback-banner error';
+    banner.innerHTML = '⚠️ ' + err.message;
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<span>Submit UTR</span>';
   }
 }
 
@@ -577,11 +889,27 @@ function showOrderSuccessView(info) {
   document.getElementById('upiAmountLabel').textContent = `Total: ${formatCurrency(info.totalPayable)} · Scan with any UPI App`;
 
   // Generate dynamic QR code image via standard high-resolution QR service
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(info.upiLink)}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(info.upiLink)}`;
   document.getElementById('upiQrCodeImg').src = qrUrl;
 
   // Direct Pay button for mobile devices with GPay/PhonePe installed
   document.getElementById('directPayUpiLink').href = info.upiLink;
+
+  // Reset UTR Box fields
+  const utrInput = document.getElementById('custUtrInput');
+  const utrBtn = document.getElementById('submitUtrBtn');
+  const utrBanner = document.getElementById('utrFeedbackBanner');
+  if (utrInput) {
+    utrInput.value = '';
+    utrInput.disabled = false;
+  }
+  if (utrBtn) {
+    utrBtn.disabled = false;
+    utrBtn.innerHTML = '<span>Submit UTR</span>';
+  }
+  if (utrBanner) {
+    utrBanner.style.display = 'none';
+  }
 
   // Pre-fill WhatsApp verification link
   const waMsg = 
@@ -591,7 +919,7 @@ function showOrderSuccessView(info) {
 • *Dress Code:* ${info.dressCode} (${info.title})
 • *Type:* ${info.orderType}
 • *Details:* ${info.datesText}
-• *Total Paid:* ₹${info.totalPayable}
+• *Total Payable:* ₹${info.totalPayable}
 • *Customer:* ${info.customerName} (${info.phoneClean})
 ---------------------------------------
 _I have completed the payment via UPI. Please find my payment screenshot attached._`;
@@ -599,7 +927,121 @@ _I have completed the payment via UPI. Please find my payment screenshot attache
   const waUrl = `https://wa.me/${CONFIG.WHATSAPP_PHONE}?text=${encodeURIComponent(waMsg)}`;
   document.getElementById('sendScreenshotWaBtn').href = waUrl;
 
-  showToast('Order saved! Please complete your UPI payment.');
+  showToast('Order locked! Please scan QR and enter 12-digit UTR below.');
+}
+
+// --------------------------------------------------------------------------
+// RENDER SELLER ADMIN DASHBOARD
+// --------------------------------------------------------------------------
+function renderSellerOrders(orders) {
+  const container = document.getElementById('sellerOrdersList');
+  const totalCountEl = document.getElementById('totalOrdersCount');
+  const pendingCountEl = document.getElementById('pendingOrdersCount');
+  const dispatchedCountEl = document.getElementById('dispatchedOrdersCount');
+
+  if (!container) return;
+
+  const total = orders.length;
+  const pending = orders.filter(o => o.status === 'Payment Submitted' || o.status === 'Pending Payment').length;
+  const dispatched = orders.filter(o => o.status === 'Verified & Dispatched' || o.dispatched).length;
+
+  if (totalCountEl) totalCountEl.textContent = total;
+  if (pendingCountEl) pendingCountEl.textContent = pending;
+  if (dispatchedCountEl) dispatchedCountEl.textContent = dispatched;
+
+  if (orders.length === 0) {
+    container.innerHTML = `
+      <div class="empty-orders-view">
+        <p style="font-size:16px; font-weight:600; margin-bottom:4px;">No orders found</p>
+        <p style="font-size:13px;">New bookings will appear here automatically in real-time.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = orders.map(order => {
+    const isDispatched = order.status === 'Verified & Dispatched' || order.dispatched;
+    const isReturned = order.status === 'Returned';
+    const hasUtr = Boolean(order.utrNumber && order.utrNumber.trim() !== '');
+
+    let badgeClass = 'pending-payment';
+    if (order.status === 'Payment Submitted') badgeClass = 'payment-submitted';
+    if (isDispatched) badgeClass = 'verified-dispatched';
+    if (isReturned) badgeClass = 'returned';
+
+    const dateDisplay = order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+    }) : 'Just now';
+
+    return `
+      <div class="seller-order-card" data-order-id="${sanitize(order.orderId)}">
+        <div class="order-card-header">
+          <div class="card-id-block">
+            <span class="card-order-id">${sanitize(order.orderId)}</span>
+            <span class="card-order-date">${sanitize(dateDisplay)}</span>
+          </div>
+          <span class="status-badge ${badgeClass}">${sanitize(order.status)}</span>
+        </div>
+
+        <div class="order-card-content">
+          <!-- Col 1: Customer Details -->
+          <div class="detail-col">
+            <span class="detail-title">Customer</span>
+            <span class="detail-main">${sanitize(order.customerName)}</span>
+            <span class="detail-sub">
+              📞 <a href="tel:${sanitize(order.phone)}" style="color:var(--crimson); text-decoration:none;">${sanitize(order.phone)}</a>
+              · <a href="https://wa.me/91${sanitize(order.phone)}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">Chat</a>
+            </span>
+            <span class="detail-sub" style="margin-top:2px;">📍 ${sanitize(order.address)}, ${sanitize(order.city || 'Indore')}</span>
+          </div>
+
+          <!-- Col 2: Outfit & Dates -->
+          <div class="detail-col">
+            <span class="detail-title">Outfit Reserved</span>
+            <span class="detail-main">${sanitize(order.dressCode)} — ${sanitize(order.dressTitle || '')}</span>
+            <span class="detail-sub">Type: <strong>${sanitize(order.orderType)}</strong></span>
+            ${order.orderType === 'RENT' ? `<span class="detail-sub">📅 ${sanitize(order.startDate)} to ${sanitize(order.endDate)} (${order.rentalDays} Nights)</span>` : ''}
+          </div>
+
+          <!-- Col 3: Financials & UTR -->
+          <div class="detail-col">
+            <span class="detail-title">Payment & UTR Verification</span>
+            <span class="detail-main" style="color:var(--crimson);">${formatCurrency(order.totalPayable)}</span>
+            <span class="detail-sub">Rent: ${formatCurrency(order.rentOrBuyAmount)} · Deposit: ${formatCurrency(order.securityDeposit)}</span>
+            
+            ${hasUtr 
+              ? `<div class="utr-highlight-chip">🏷️ UTR: <strong>${sanitize(order.utrNumber)}</strong></div>`
+              : `<div class="utr-missing-chip">⚠️ Pending Customer UTR</div>`
+            }
+          </div>
+        </div>
+
+        <div class="order-card-actions">
+          ${!isDispatched && !isReturned ? `
+            <button type="button" class="verify-dispatch-btn" data-order-id="${sanitize(order.orderId)}" title="Verifies payment and opens WhatsApp to dispatch to customer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.301-.15-1.78-.879-2.056-.98-.276-.1-.476-.15-.677.15-.201.3-.777.98-.952 1.18-.175.2-.351.226-.652.075-.301-.15-1.27-.468-2.42-1.493-.895-.798-1.5-1.784-1.675-2.085-.175-.3-.019-.462.132-.612.136-.135.301-.351.451-.527.151-.175.201-.3.301-.5.1-.2.05-.376-.025-.526-.075-.15-.677-1.63-.928-2.235-.245-.589-.494-.509-.677-.518-.175-.008-.376-.01-.577-.01-.201 0-.527.075-.802.376-.276.3-1.053 1.028-1.053 2.508 0 1.48 1.078 2.909 1.229 3.11.15.2 2.122 3.24 5.14 4.544.718.31 1.279.496 1.716.634.721.23 1.377.197 1.896.12.578-.087 1.78-.727 2.03-1.43.251-.703.251-1.305.176-1.43-.075-.125-.276-.2-.577-.35zM12 2C6.477 2 2 6.477 2 12c0 1.891.524 3.662 1.433 5.178L2.05 21.95l4.896-1.353A9.957 9.957 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+              <span>✅ Verify Payment & Dispatch</span>
+            </button>
+          ` : ''}
+
+          ${isDispatched && !isReturned ? `
+            <span style="font-size:12px; font-weight:600; color:var(--emerald); display:flex; align-items:center; gap:4px;">
+              ✓ Dispatched & On Route
+            </span>
+            <button type="button" class="mark-returned-btn" data-order-id="${sanitize(order.orderId)}">
+              <span>🔄 Mark Returned & Refund Deposit</span>
+            </button>
+          ` : ''}
+
+          ${isReturned ? `
+            <span style="font-size:12px; font-weight:600; color:#3730A3;">
+              ✓ Returned & Closed
+            </span>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 // --------------------------------------------------------------------------

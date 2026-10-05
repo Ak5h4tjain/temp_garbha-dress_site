@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================================================================
+    // HELPER FUNCTIONS & AUTHENTICATION VALIDATORS
+    // ========================================================================
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isSeller() {
+      return isSignedIn() && (
+        request.auth.token.email == 'admin@kissa.in' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'seller')
+      );
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidPhone(phone) {
+      return phone is string && phone.size() >= 10 && phone.size() <= 15;
+    }
+
+    // ========================================================================
+    // 1. USERS COLLECTION (Customer & Seller Profiles)
+    // ========================================================================
+    match /users/{userId} {
+      function isValidUserData(data) {
+        return data.keys().hasAll(['uid', 'displayName', 'role']) &&
+          data.uid == userId &&
+          isValidString(data.displayName, 1, 100) &&
+          (data.role == 'customer' || data.role == 'seller');
+      }
+
+      // Users can read their own profile; Sellers can read all profiles
+      allow read: if isOwner(userId) || isSeller();
+
+      // Users can create their own profile; cannot self-assign seller role unless authorized
+      allow create: if isOwner(userId) && isValidUserData(request.resource.data) &&
+        (request.resource.data.role == 'customer' || request.auth.token.email == 'admin@kissa.in');
+
+      // Users can update their name/phone; only current sellers can update roles
+      allow update: if (isOwner(userId) && isValidUserData(request.resource.data) &&
+        request.resource.data.role == resource.data.role) || isSeller();
+
+      allow delete: if isSeller();
+    }
+
+    // ========================================================================
+    // 2. PRODUCTS COLLECTION (Catalog & Authoritative Pricing)
+    // ========================================================================
+    match /products/{dressCode} {
+      function isValidProductData(data) {
+        return data.keys().hasAll(['code', 'title', 'rentPerDay', 'securityDeposit', 'buyPrice']) &&
+          isValidString(data.code, 3, 30) &&
+          isValidString(data.title, 2, 150) &&
+          data.rentPerDay is number && data.rentPerDay > 0 &&
+          data.securityDeposit is number && data.securityDeposit >= 0 &&
+          data.buyPrice is number && data.buyPrice > 0;
+      }
+
+      // Public read access for customers to browse outfits & prices
+      allow read: if true;
+
+      // Only authenticated Sellers can create, update or delete products
+      allow create, update: if isSeller() && isValidProductData(request.resource.data);
+      allow delete: if isSeller();
+    }
+
+    // ========================================================================
+    // 3. ORDERS COLLECTION (Zero-Trust Anti-Price-Tampering Lifecycle)
+    // ========================================================================
+    match /orders/{orderId} {
+      function isValidNewOrder(data) {
+        return data.keys().hasAll([
+          'orderId', 'customerName', 'phone', 'city', 'address', 
+          'dressCode', 'orderType', 'totalPayable', 'status'
+        ]) &&
+        data.orderId == orderId &&
+        isValidString(data.customerName, 2, 100) &&
+        isValidPhone(data.phone) &&
+        isValidString(data.address, 5, 300) &&
+        isValidString(data.dressCode, 3, 30) &&
+        (data.orderType == 'RENT' || data.orderType == 'BUY') &&
+        data.totalPayable is number && data.totalPayable > 0 &&
+        data.status == 'Pending Payment';
+      }
+
+      // Customer can read their own orders; Seller can read all orders
+      allow read: if isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
+
+      // Customer can place order with initial status 'Pending Payment'
+      allow create: if isSignedIn() && 
+        request.resource.data.customerUid == request.auth.uid &&
+        isValidNewOrder(request.resource.data);
+
+      // Customer can ONLY update utrNumber and set status to 'Payment Submitted'
+      // Customer is STRICTLY FORBIDDEN from altering totalPayable, dressCode, or rental dates!
+      allow update: if 
+        // Case A: Customer submitting UTR Transaction ID
+        (isSignedIn() && resource.data.customerUid == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['utrNumber', 'status', 'utrSubmittedAt']) &&
+         request.resource.data.status == 'Payment Submitted' &&
+         isValidString(request.resource.data.utrNumber, 10, 20))
+        ||
+        // Case B: Seller verifying payment, dispatching, or restocking
+        isSeller();
+
+      // Only seller can delete/archive orders
+      allow delete: if isSeller();
+    }
+
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

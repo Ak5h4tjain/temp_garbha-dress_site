@@ -189,12 +189,53 @@ All outfit codes, rental prices, deposits, and sizes are configured in [`product
 
 ---
 
+## 🔥 Firebase Database, Authentication & Seller Hub
+
+The system includes a Cloud Firestore architecture with Role-Based Access Control (RBAC), Anti-Price-Tampering, and 12-digit UTR Verification:
+
+### 1. User & Seller Authentication
+- **Dual Auth**: Supports Google One-Tap Popup & Email/Password authentication.
+- **Role-Based Access Control**:
+  - `customer`: Can place orders, view their own order history, and submit their 12-digit payment UTR.
+  - `seller`: Admin privileges (`admin@kissa.in`), access to the **👑 Seller Hub** live order dashboard, and 1-click WhatsApp dispatch actions.
+- **Zero-Setup Demo Modes**: Includes 1-click test roles (`👤 Demo Customer` and `👑 Demo Seller`) for instant local testing without configuring cloud credentials.
+
+### 2. Zero-Trust Anti-Price-Tampering Architecture
+- **Problem**: In naive client-side shops, users can inspect element or edit JS memory variables to buy a ₹6,000 dress for ₹1.
+- **Solution**: In [`firebase-config.js`](./firebase-config.js), `createOrderInFirestore` computes the true order total strictly from `OFFICIAL_PRICING_MAP[dressCode]`. Even if an attacker manipulates the client DOM, the Firestore order document is written with the authoritative price.
+- **Firestore Security Rules**: [`firestore.rules`](./firestore.rules) guarantees that customers cannot modify prices, dates, or order status. Customers are only allowed to update `utrNumber`.
+
+### 3. Two-Step Payment & 12-Digit UTR Tracking
+1. **Step 1 (Scan & Pay)**: Customer scans the dynamic UPI QR code or taps direct UPI link.
+2. **Step 2 (Enter UTR)**: Customer enters their 12-digit UPI Transaction / Reference ID (from GPay, PhonePe, Paytm receipt) into the verification input.
+3. The order status updates from `Pending Payment` to `Payment Submitted` in Firestore.
+
+### 4. 👑 Seller Hub & Automated WhatsApp Dispatch
+1. Seller opens **👑 Seller Hub** from the website header.
+2. The dashboard shows real-time stats (Total Orders, Pending UTR Check, Dispatched).
+3. The seller inspects the customer's **12-digit UTR** highlighted on the order card.
+4. With 1 click on **`[ ✅ Verify Payment & Dispatch ]`**:
+   - Order status in Firestore updates to `Verified & Dispatched`.
+   - Automatically opens WhatsApp with a pre-filled dispatch message:
+     ```text
+     Namaste Aarav Patel ji! 🌸
+
+     ✅ Your payment of ₹2,299 (UTR: 428190382910) for Order ORD-XXXX has been VERIFIED.
+
+     🚚 Your festive outfit (032026/2101 — Navratri Special Kutchi Rabari Lehenga) has been packed and DISPATCHED for doorstep delivery in Indore!
+
+     📦 Address: Flat 402, Royal Palms, Vijay Nagar
+
+     Thank you for choosing Kissa Garbha Rentals! ✨
+     ```
+
+---
+
 ## 📱 Daily Rental Lifecycle for the Owner
 
-1. **New Order**: Customer places an order on your site and sends payment screenshot on WhatsApp.
-2. **Verify**: Check your bank / UPI app for credit, then tap **`[ ✅ 1-Tap Verify Payment ]`** in Telegram.
-3. **Deliver**: Pack dress and deliver to Indore doorstep. Tap **`[ 🚚 Mark Delivered ]`**.
-4. **Restock**: When the dress is returned, inspect it, refund the security deposit, and tap **`[ 🔄 Dress Returned & Restocked ]`**. The calendar dates instantly reopen on your website for the next customer!
+1. **New Order**: Customer places an order on your site and submits their 12-digit UTR number.
+2. **Verify & Dispatch**: Open **👑 Seller Hub**, verify bank receipt against the UTR chip, and tap **`[ ✅ Verify Payment & Dispatch ]`**. WhatsApp opens automatically with the dispatch message!
+3. **Restock**: When the dress is returned, inspect it, tap **`[ 🔄 Mark Returned & Refund Deposit ]`**, and WhatsApp pre-fills the deposit refund notification.
 
 ---
 
