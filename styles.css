@@ -1,0 +1,1017 @@
+/* ==========================================================================
+   KISSA GARBHA RENTALS - MODERN LUXURY DESIGN SYSTEM
+   ========================================================================== */
+
+:root {
+  --font-heading: 'Yatra One', Georgia, serif;
+  --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  
+  /* Luxury Festive Color Palette */
+  --bg: #FAF7F5;
+  --bg-card: #FFFFFF;
+  --bg-subtle: #F5EFEB;
+  --bg-dark: #1A0A10;
+  
+  --ink-primary: #1F1418;
+  --ink-secondary: #6E5D63;
+  --ink-muted: #9E8D93;
+  --ink-inverted: #FFFFFF;
+  
+  --crimson: #D83A43;
+  --crimson-glow: rgba(216, 58, 67, 0.16);
+  --saffron: #FF8A3D;
+  --gold: #D4A346;
+  --gold-light: #FCEFD5;
+  --emerald: #0B6B5B;
+  --emerald-light: #E6F5F1;
+  
+  --gradient-festive: linear-gradient(135deg, #FF8A3D 0%, #D83A43 55%, #8B1E3F 100%);
+  --gradient-gold: linear-gradient(135deg, #F2C94C 0%, #D4A346 100%);
+  --gradient-dark: linear-gradient(180deg, #240E17 0%, #15060C 100%);
+  
+  --border-light: rgba(216, 58, 67, 0.12);
+  --border-strong: rgba(216, 58, 67, 0.28);
+  
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-full: 9999px;
+  
+  --shadow-sm: 0 4px 12px rgba(27, 12, 17, 0.05);
+  --shadow-md: 0 12px 28px -6px rgba(216, 58, 67, 0.12);
+  --shadow-lg: 0 20px 48px -12px rgba(27, 12, 17, 0.18);
+  
+  --transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-body);
+  color: var(--ink-primary);
+  background: var(--bg);
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  line-height: 1.5;
+}
+
+/* Typography Helpers */
+.font-festive {
+  font-family: var(--font-heading);
+  letter-spacing: 0.5px;
+}
+
+.gradient-text {
+  background: var(--gradient-festive);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   HEADER & NAVIGATION
+   -------------------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(250, 247, 245, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-light);
+  padding: 12px 0;
+  transition: var(--transition);
+}
+
+.wrap {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+}
+
+.brand-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--gradient-festive);
+  display: grid;
+  place-items: center;
+  color: #FFF;
+  box-shadow: 0 8px 18px -4px rgba(216, 58, 67, 0.4);
+}
+
+.brand-text h1 {
+  font-size: 26px;
+  line-height: 1.1;
+  color: var(--ink-primary);
+}
+
+.brand-text p {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--crimson);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: var(--emerald-light);
+  color: var(--emerald);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--emerald);
+  box-shadow: 0 0 0 3px rgba(11, 107, 91, 0.2);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.whatsapp-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  background: #25D366;
+  color: #FFF;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: var(--transition);
+  box-shadow: 0 6px 16px -4px rgba(37, 211, 102, 0.4);
+}
+
+.whatsapp-help-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px -4px rgba(37, 211, 102, 0.5);
+}
+
+/* --------------------------------------------------------------------------
+   HERO BANNER
+   -------------------------------------------------------------------------- */
+.hero-section {
+  padding: 30px 0 20px;
+}
+
+.hero-card {
+  position: relative;
+  background: var(--gradient-dark);
+  border-radius: var(--radius-lg);
+  color: var(--ink-inverted);
+  padding: 38px 32px;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hero-card::before {
+  content: "";
+  position: absolute;
+  top: -80px;
+  right: -80px;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 138, 61, 0.35) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-card::after {
+  content: "";
+  position: absolute;
+  bottom: -60px;
+  left: 20%;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(216, 58, 67, 0.28) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+}
+
+.hero-badge {
+  display: inline-block;
+  padding: 5px 14px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--gold-light);
+  margin-bottom: 12px;
+}
+
+.hero-title {
+  font-size: clamp(28px, 5vw, 46px);
+  line-height: 1.15;
+  margin-bottom: 12px;
+}
+
+.hero-subtitle {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 22px;
+  max-width: 540px;
+}
+
+.hero-perks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--gold-light);
+}
+
+.hero-perk-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   FILTERS & SEARCH
+   -------------------------------------------------------------------------- */
+.controls-bar {
+  padding: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .controls-bar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.category-pills {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+
+.category-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.cat-btn {
+  padding: 9px 18px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--ink-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+
+.cat-btn:hover {
+  border-color: var(--crimson);
+  color: var(--crimson);
+}
+
+.cat-btn.active {
+  background: var(--gradient-festive);
+  color: #FFF;
+  border-color: transparent;
+  box-shadow: 0 4px 14px -2px rgba(216, 58, 67, 0.4);
+}
+
+.search-box {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 10px 16px 10px 40px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink-primary);
+  outline: none;
+  transition: var(--transition);
+}
+
+.search-input:focus {
+  border-color: var(--crimson);
+  box-shadow: 0 0 0 3px var(--crimson-glow);
+}
+
+.search-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   PRODUCT GRID
+   -------------------------------------------------------------------------- */
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(1, 1fr);
+  gap: 24px;
+  padding: 16px 0 60px;
+}
+
+@media (min-width: 600px) {
+  .product-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 960px) {
+  .product-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1180px) {
+  .product-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   PRODUCT CARD & CODE PLACEHOLDER
+   -------------------------------------------------------------------------- */
+.product-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: var(--transition);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+}
+
+.product-card:hover {
+  transform: translateY(-6px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
+}
+
+/* Code Badge Visual Placeholder (Until User Adds Real Photos Tomorrow) */
+.product-media-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 4.8;
+  background: var(--bg-subtle);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.code-placeholder-card {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  position: relative;
+  background: linear-gradient(145deg, #FFF9F5 0%, #F5EAE4 100%);
+}
+
+.code-placeholder-card::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border: 1.5px dashed rgba(216, 58, 67, 0.25);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+
+.code-badge-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--crimson);
+  margin-bottom: 6px;
+}
+
+.code-display-number {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: clamp(20px, 3vw, 24px);
+  font-weight: 700;
+  color: var(--ink-primary);
+  background: #FFF;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(216, 58, 67, 0.2);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.04);
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.placeholder-note {
+  font-size: 11px;
+  color: var(--ink-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* If user has real image tomorrow */
+.product-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+
+.product-card:hover .product-image {
+  transform: scale(1.05);
+}
+
+.card-category-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--crimson);
+  z-index: 2;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* Card Body */
+.card-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink-primary);
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
+.card-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.spec-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--ink-secondary);
+  border: 1px solid rgba(0,0,0,0.04);
+}
+
+.pricing-block {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-light);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.rent-rate {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--crimson);
+}
+
+.rent-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-secondary);
+}
+
+.deposit-tag {
+  font-size: 11px;
+  color: var(--ink-secondary);
+  background: var(--gold-light);
+  color: #7A5500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+
+.book-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--gradient-festive);
+  color: #FFF;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: var(--transition);
+}
+
+.book-btn:hover {
+  opacity: 0.95;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -2px rgba(216, 58, 67, 0.4);
+}
+
+/* --------------------------------------------------------------------------
+   MODAL / BOOKING DRAWER
+   -------------------------------------------------------------------------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 7, 12, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 100;
+  display: none;
+  place-items: center;
+  padding: 16px;
+}
+
+.modal-backdrop.active {
+  display: grid;
+}
+
+.booking-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 92vh;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  animation: modalIn 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.96) translateY(14px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  background: #FFF;
+  z-index: 10;
+}
+
+.modal-header h3 {
+  font-size: 20px;
+  color: var(--ink-primary);
+}
+
+.close-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  border: none;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  color: var(--ink-secondary);
+  transition: var(--transition);
+}
+
+.close-btn:hover {
+  background: var(--border-light);
+  color: var(--crimson);
+}
+
+.modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Selected Product Summary Box */
+.selected-product-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+}
+
+.summary-code-badge {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--crimson);
+  color: #FFF;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+}
+
+/* Date Picker Form */
+.form-group-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border-light);
+  background: #FFF;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink-primary);
+  outline: none;
+  transition: var(--transition);
+}
+
+.form-input:focus {
+  border-color: var(--crimson);
+  box-shadow: 0 0 0 3px var(--crimson-glow);
+}
+
+/* Availability Status Callout */
+.availability-banner {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: var(--transition);
+}
+
+.availability-banner.available {
+  background: var(--emerald-light);
+  color: var(--emerald);
+  border: 1px solid rgba(11, 107, 91, 0.2);
+}
+
+.availability-banner.booked {
+  background: #FEE2E2;
+  color: #B91C1C;
+  border: 1px solid rgba(185, 28, 28, 0.2);
+}
+
+.availability-banner.checking {
+  background: var(--gold-light);
+  color: #854D0E;
+}
+
+/* Live Bill Summary Box */
+.bill-box {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bill-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.bill-line.total {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.deposit-note {
+  font-size: 11px;
+  color: var(--emerald);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* WhatsApp Action Button */
+.whatsapp-confirm-btn {
+  width: 100%;
+  padding: 15px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: #25D366;
+  color: #FFF;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 8px 22px -4px rgba(37, 211, 102, 0.5);
+  transition: var(--transition);
+}
+
+.whatsapp-confirm-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -4px rgba(37, 211, 102, 0.6);
+}
+
+.whatsapp-confirm-btn:disabled {
+  background: #C1C9D2;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Toast Alerts */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 12px 24px;
+  border-radius: var(--radius-full);
+  background: var(--bg-dark);
+  color: #FFF;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transform: translateY(16px);
+  transition: var(--transition);
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Footer */
+.site-footer {
+  margin-top: auto;
+  background: var(--bg-dark);
+  color: rgba(255, 255, 255, 0.7);
+  padding: 30px 0;
+  font-size: 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.footer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+}
+
+@media (min-width: 600px) {
+  .footer-content {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   RENT VS BUY TOGGLE & SUCCESS SCREEN
+   -------------------------------------------------------------------------- */
+.order-type-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: var(--bg-subtle);
+  padding: 6px;
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+
+.type-switch-btn {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.type-switch-btn.active {
+  background: #FFF;
+  color: var(--crimson);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+
+.buy-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: #EFF6FF;
+  color: #1D4ED8;
+  font-weight: 600;
+}
+
+.order-success-view {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 10px 0;
+  gap: 16px;
+}
+
+.order-success-view.active {
+  display: flex;
+}
+
+.success-icon-badge {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--emerald-light);
+  color: var(--emerald);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 8px 24px -4px rgba(11, 107, 91, 0.3);
+}
+
+.order-id-chip {
+  display: inline-block;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  background: var(--bg-subtle);
+  color: var(--crimson);
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  letter-spacing: 1px;
+}
+
+.qr-code-box {
+  background: #FFF;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 2px dashed var(--border-strong);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+
+.qr-code-box img {
+  width: 180px;
+  height: 180px;
+  display: block;
+}
+
+.qr-upi-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+.pay-upi-direct-btn {
+  width: 100%;
+  padding: 14px;
+  border-radius: var(--radius-full);
+  background: var(--gradient-festive);
+  color: #FFF;
+  font-weight: 700;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 6px 18px -4px rgba(216, 58, 67, 0.4);
+  transition: var(--transition);
+}
+
+.pay-upi-direct-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -4px rgba(216, 58, 67, 0.5);
+}
+
