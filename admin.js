@@ -38,10 +38,19 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
+let initRetries = 0;
+const MAX_RETRIES = 10;
+
 function initAdminApp() {
   // Defensive guard: ensure critical admin container exists before running setup
   const gatekeeper = document.getElementById('adminGatekeeper');
   if (!gatekeeper) {
+    if (initRetries++ >= MAX_RETRIES) {
+      console.warn('[Admin] #adminGatekeeper not found after retries, proceeding anyway');
+      setupAdminAuth();
+      setupDashboardControls();
+      return;
+    }
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', initAdminApp, { once: true });
     } else if (document.readyState !== 'complete') {

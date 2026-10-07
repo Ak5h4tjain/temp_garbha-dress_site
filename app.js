@@ -61,10 +61,21 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
+let initRetries = 0;
+const MAX_RETRIES = 10;
+
 function initCustomerApp() {
   // Defensive guard: ensure critical DOM container exists before running setup
   const productGrid = document.getElementById('productGrid');
   if (!productGrid) {
+    if (initRetries++ >= MAX_RETRIES) {
+      console.warn('[App] #productGrid not found after retries, proceeding with remaining setup');
+      setupEventListeners();
+      prefetchInventoryAvailability();
+      initializeAuthAndOrderStreams();
+      enforceAccessibleLabels();
+      return;
+    }
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', initCustomerApp, { once: true });
     } else if (document.readyState !== 'complete') {

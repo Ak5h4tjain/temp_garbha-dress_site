@@ -125,6 +125,10 @@ export function validateAndSanitizeServerConfig(serverConfig) {
   return sanitized.apiKey ? sanitized : null;
 }
 
+// Explicit production deployment detection (e.g. Vercel hosted preview or production domain)
+export const isExplicitProduction = typeof window !== 'undefined' && 
+  (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'kissa.in' || window.location.hostname.endsWith('.kissa.in'));
+
 // Check if running in a local/development environment (covers LAN IPs, 0.0.0.0, dev flags, and mDNS)
 export const isLocalEnv = typeof window !== 'undefined' && (() => {
   const { hostname, protocol, search } = window.location;
@@ -150,24 +154,22 @@ export const isLocalEnv = typeof window !== 'undefined' && (() => {
   const isPrivateIp = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(hostname);
   if (isPrivateIp) return true;
 
-  // 3. Explicit dev overrides via URL parameter (?env=local, ?dev=1, ?local=1)
-  if (search && (search.includes('env=local') || search.includes('dev=1') || search.includes('local=1'))) {
+  // 3. Explicit dev overrides via URL parameter (only honored on non-production hosts)
+  if (!isExplicitProduction && search && (search.includes('env=local') || search.includes('dev=1') || search.includes('local=1'))) {
     return true;
   }
 
-  // 4. Explicit dev flag in localStorage
-  try {
-    if (localStorage.getItem('kissa_env') === 'local' || localStorage.getItem('kissa_dev_mode') === 'true') {
-      return true;
-    }
-  } catch (_) {}
+  // 4. Explicit dev flag in localStorage (only honored on non-production hosts)
+  if (!isExplicitProduction) {
+    try {
+      if (localStorage.getItem('kissa_env') === 'local' || localStorage.getItem('kissa_dev_mode') === 'true') {
+        return true;
+      }
+    } catch (_) {}
+  }
 
   return false;
 })();
-
-// Explicit production deployment detection (e.g. Vercel hosted preview or production domain)
-const isExplicitProduction = typeof window !== 'undefined' && 
-  (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'kissa.in' || window.location.hostname.endsWith('.kissa.in'));
 
 // Attempt local credentials import in local dev or any non-production environment
 if (isLocalEnv || !isExplicitProduction) {
@@ -323,7 +325,7 @@ export async function loginWithEmail(email, password) {
   const cleanEmail = String(email || '').trim().toLowerCase();
   
   if (!isFirebaseConfigured()) {
-    const isSeller = cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase() || cleanEmail.includes('admin');
+    const isSeller = cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase();
     const existingUsers = getLocalUsers();
     let matched = existingUsers.find(u => u.email.toLowerCase() === cleanEmail);
 
@@ -706,7 +708,6 @@ export function subscribeToAllOrders(callback) {
     window.addEventListener('kissa_orders_updated', notify);
 
     return () => {
-      window.removeEventListener('storage', notify);
       window.removeEventListener('kissa_orders_updated', notify);
     };
   }
