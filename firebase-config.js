@@ -42,34 +42,58 @@ import {
 import { PRODUCTS } from './products.js';
 
 // --------------------------------------------------------------------------
-// 1. FIREBASE PROJECT CONFIGURATION
+// 1. FIREBASE PROJECT CONFIGURATION (GIT-SAFE & PROTECTED)
 // --------------------------------------------------------------------------
-// ⚠️ Replace the values below with your Firebase Web App credentials from:
-// Firebase Console (console.firebase.google.com) -> Project Settings -> General -> Your apps
-export const firebaseConfig = {
+// Default placeholder template; real API keys are securely loaded from
+// gitignored `firebase-credentials.js` locally or `/api/config` in production.
+let resolvedConfig = {
   apiKey: "AIzaSy_YOUR_FIREBASE_API_KEY",
-  authDomain: "kissa-festive-rentals.firebaseapp.com",
-  projectId: "kissa-festive-rentals",
-  storageBucket: "kissa-festive-rentals.appspot.com",
-  messagingSenderId: "123456789012",
-  appId: "1:123456789012:web:abcdef1234567890"
+  authDomain: "kissa-database.firebaseapp.com",
+  projectId: "kissa-database",
+  storageBucket: "kissa-database.firebasestorage.app",
+  messagingSenderId: "1098932701632",
+  appId: "1:1098932701632:web:8848e52891835990116025",
+  measurementId: "G-KWYY8226GB"
 };
+
+// 1. Attempt to load local gitignored credentials (development / private client)
+try {
+  const localModule = await import('./firebase-credentials.js');
+  if (localModule && localModule.firebaseCredentials && localModule.firebaseCredentials.apiKey) {
+    resolvedConfig = { ...resolvedConfig, ...localModule.firebaseCredentials };
+  }
+} catch (_) {
+  // 2. Fallback: Query Vercel serverless environment provider (/api/config)
+  try {
+    const apiRes = await fetch('/api/config');
+    if (apiRes.ok) {
+      const serverConfig = await apiRes.json();
+      if (serverConfig && serverConfig.apiKey) {
+        resolvedConfig = { ...resolvedConfig, ...serverConfig };
+      }
+    }
+  } catch (__) {}
+}
+
+export const firebaseConfig = resolvedConfig;
 
 // Check if credentials are placeholders or configured
 export const isFirebaseConfigured = () => {
-  return firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('YOUR_FIREBASE');
+  return Boolean(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('YOUR_FIREBASE'));
 };
 
-let app, auth, db;
+let app = null, auth = null, db = null;
 try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
+  if (isFirebaseConfigured()) {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  }
 } catch (err) {
   console.info('Firebase initialization running in offline/standalone mode:', err.message);
 }
 
-export { auth, db };
+export { app, auth, db };
 
 // --------------------------------------------------------------------------
 // 2. AUTHORITATIVE PRODUCT CATALOG (IMMUTABLE SERVER-SIDE PRICING)

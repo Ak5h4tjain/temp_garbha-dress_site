@@ -10,5 +10,12 @@ desktop.ini
 # Log and temporary files
 *.log
 scratch/
+
+# Credentials & Secrets (Strictly Excluded from GitHub)
+firebase-credentials.js
+firebase-credentials.local.js
+*.local.js
 .env
-.env.local
+.env.*
+!.env.example
+
