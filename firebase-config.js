@@ -81,24 +81,30 @@ export function validateAndSanitizeServerConfig(serverConfig) {
   }
 
   // 1. Validate API Key format and ensure it's not a placeholder
+  if (typeof serverConfig.apiKey !== 'string') {
+    return null;
+  }
+
+  const trimmedApiKey = serverConfig.apiKey.trim();
   if (
-    typeof serverConfig.apiKey !== 'string' ||
-    !serverConfig.apiKey.trim() ||
-    serverConfig.apiKey.includes('YOUR_FIREBASE') ||
-    !serverConfig.apiKey.startsWith('AIzaSy')
+    !trimmedApiKey ||
+    trimmedApiKey.includes('YOUR_FIREBASE') ||
+    !trimmedApiKey.startsWith('AIzaSy')
   ) {
     return null;
   }
 
   // 2. Strictly verify projectId matches the trusted production project ID
-  if (serverConfig.projectId && serverConfig.projectId !== EXPECTED_PROJECT_ID) {
-    console.warn(`[Security] Untrusted /api/config: projectId "${serverConfig.projectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
+  const trimmedProjectId = typeof serverConfig.projectId === 'string' ? serverConfig.projectId.trim() : '';
+  if (trimmedProjectId && trimmedProjectId !== EXPECTED_PROJECT_ID) {
+    console.warn(`[Security] Untrusted /api/config: projectId "${trimmedProjectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
     return null;
   }
 
   // 3. Strictly verify authDomain matches the trusted production auth domain
-  if (serverConfig.authDomain && serverConfig.authDomain !== EXPECTED_AUTH_DOMAIN) {
-    console.warn(`[Security] Untrusted /api/config: authDomain "${serverConfig.authDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
+  const trimmedAuthDomain = typeof serverConfig.authDomain === 'string' ? serverConfig.authDomain.trim() : '';
+  if (trimmedAuthDomain && trimmedAuthDomain !== EXPECTED_AUTH_DOMAIN) {
+    console.warn(`[Security] Untrusted /api/config: authDomain "${trimmedAuthDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
     return null;
   }
 
@@ -107,10 +113,12 @@ export function validateAndSanitizeServerConfig(serverConfig) {
   for (const key of ALLOWED_CONFIG_KEYS) {
     if (
       Object.prototype.hasOwnProperty.call(serverConfig, key) &&
-      typeof serverConfig[key] === 'string' &&
-      serverConfig[key].trim().length > 0
+      typeof serverConfig[key] === 'string'
     ) {
-      sanitized[key] = serverConfig[key].trim();
+      const val = serverConfig[key].trim();
+      if (val.length > 0) {
+        sanitized[key] = val;
+      }
     }
   }
 
@@ -168,12 +176,17 @@ if (isLocalEnv || !isExplicitProduction) {
     const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials);
     if (sanitizedLocal) {
       resolvedConfig = { ...resolvedConfig, ...sanitizedLocal };
+    } else {
+      console.warn('[Config] Local credentials in firebase-credentials.js failed validation or were empty.');
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn('[Config] Local credentials import (./firebase-credentials.js) failed or file not found:', err.message || err);
+  }
 }
 
 // In production (Vercel) or when local file is not present, fetch from /api/config
-if (!resolvedConfig.apiKey || resolvedConfig.apiKey.includes('YOUR_FIREBASE')) {
+const activeApiKey = typeof resolvedConfig.apiKey === 'string' ? resolvedConfig.apiKey.trim() : '';
+if (!activeApiKey || activeApiKey.includes('YOUR_FIREBASE')) {
   try {
     const apiRes = await fetch('/api/config');
     if (apiRes.ok) {
@@ -181,16 +194,23 @@ if (!resolvedConfig.apiKey || resolvedConfig.apiKey.includes('YOUR_FIREBASE')) {
       const sanitizedConfig = validateAndSanitizeServerConfig(serverConfig);
       if (sanitizedConfig) {
         resolvedConfig = { ...resolvedConfig, ...sanitizedConfig };
+      } else {
+        console.warn('[Config] Server config from /api/config failed validation or was missing valid keys.');
       }
+    } else {
+      console.warn(`[Config] Failed to fetch /api/config: HTTP ${apiRes.status} ${apiRes.statusText}`);
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn('[Config] Network error while fetching /api/config:', err.message || err);
+  }
 }
 
 export const firebaseConfig = resolvedConfig;
 
 // Check if credentials are placeholders or configured
 export const isFirebaseConfigured = () => {
-  return Boolean(firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('YOUR_FIREBASE'));
+  const key = typeof firebaseConfig.apiKey === 'string' ? firebaseConfig.apiKey.trim() : '';
+  return Boolean(key && !key.includes('YOUR_FIREBASE'));
 };
 
 let app = null, auth = null, db = null;
