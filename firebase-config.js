@@ -117,63 +117,52 @@ export function validateAndSanitizeServerConfig(serverConfig) {
   return sanitized.apiKey ? sanitized : null;
 }
 
-// Check if running on local development machine, private LAN IP, or non-production environment
-export const checkIsLocalEnv = () => {
-  if (typeof window === 'undefined') return false;
-
+// Check if running in a local/development environment (covers LAN IPs, 0.0.0.0, dev flags, and mDNS)
+export const isLocalEnv = typeof window !== 'undefined' && (() => {
   const { hostname, protocol, search } = window.location;
-
-  // 1. Local filesystem
   if (protocol === 'file:') return true;
 
-  // 2. Explicit dev flag overrides (window.__DEV__, window.IS_LOCAL_ENV, or ?dev=true)
-  if (
-    (typeof window.__DEV__ !== 'undefined' && Boolean(window.__DEV__)) ||
-    (typeof window.IS_LOCAL_ENV !== 'undefined' && Boolean(window.IS_LOCAL_ENV)) ||
-    search.includes('dev=true')
-  ) {
-    return true;
-  }
-
-  // 3. Common loopback, LAN, and dev hostnames
+  // 1. Direct matches for standard loopback, wildcard, and local hostnames
   if (
     hostname === 'localhost' ||
     hostname === '0.0.0.0' ||
     hostname === '127.0.0.1' ||
-    hostname === '[::1]' ||
     hostname === '::1' ||
-    hostname.endsWith('.local') ||
+    hostname === '[::1]' ||
     hostname.endsWith('.localhost') ||
-    hostname.endsWith('.lan') ||
+    hostname.endsWith('.local') ||
     hostname.endsWith('.test') ||
-    hostname.endsWith('.nip.io') ||
-    hostname.endsWith('.sslip.io')
+    hostname.endsWith('.example')
   ) {
     return true;
   }
 
-  // 4. IPv4 Private & Loopback Address Ranges (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16)
-  const isPrivateIp = 
-    /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(hostname) ||
-    /^10(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(hostname) ||
-    /^172\.(?:1[6-9]|2[0-9]|3[01])(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){2}$/.test(hostname) ||
-    /^192\.168(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){2}$/.test(hostname) ||
-    /^169\.254(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){2}$/.test(hostname);
-
+  // 2. Private IPv4 ranges (RFC 1918 & loopback):
+  //    127.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12
+  const isPrivateIp = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(hostname);
   if (isPrivateIp) return true;
 
-  // 5. Only treat explicit production deployments as non-local
-  const isExplicitProduction = 
-    hostname.endsWith('.vercel.app') || 
-    hostname === 'kissa.in' || 
-    hostname.endsWith('.kissa.in');
+  // 3. Explicit dev overrides via URL parameter (?env=local, ?dev=1, ?local=1)
+  if (search && (search.includes('env=local') || search.includes('dev=1') || search.includes('local=1'))) {
+    return true;
+  }
 
-  return !isExplicitProduction;
-};
+  // 4. Explicit dev flag in localStorage
+  try {
+    if (localStorage.getItem('kissa_env') === 'local' || localStorage.getItem('kissa_dev_mode') === 'true') {
+      return true;
+    }
+  } catch (_) {}
 
-const isLocalEnv = checkIsLocalEnv();
+  return false;
+})();
 
-if (isLocalEnv) {
+// Explicit production deployment detection (e.g. Vercel hosted preview or production domain)
+const isExplicitProduction = typeof window !== 'undefined' && 
+  (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'kissa.in' || window.location.hostname.endsWith('.kissa.in'));
+
+// Attempt local credentials import in local dev or any non-production environment
+if (isLocalEnv || !isExplicitProduction) {
   try {
     const localModule = await import('./firebase-credentials.js');
     const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials);
