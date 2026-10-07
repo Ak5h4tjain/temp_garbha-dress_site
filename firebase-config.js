@@ -20,7 +20,8 @@ import {
   createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  updateProfile 
+  updateProfile,
+  signInAnonymously
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { 
   getFirestore, 
@@ -341,9 +342,26 @@ export async function createOrderInFirestore(orderInput, currentUser) {
   const totalPayable = rentOrBuyAmount + securityDeposit;
   const orderId = 'ORD-' + Date.now().toString(36).toUpperCase();
 
+  let resolvedCustomerUid = currentUser ? currentUser.uid : null;
+  if (!resolvedCustomerUid && auth && isFirebaseConfigured()) {
+    if (auth.currentUser) {
+      resolvedCustomerUid = auth.currentUser.uid;
+    } else {
+      try {
+        const anonCred = await signInAnonymously(auth);
+        resolvedCustomerUid = anonCred.user.uid;
+      } catch (anonErr) {
+        resolvedCustomerUid = 'guest_' + Date.now();
+      }
+    }
+  }
+  if (!resolvedCustomerUid) {
+    resolvedCustomerUid = 'guest_' + Date.now();
+  }
+
   const orderDocument = {
     orderId: orderId,
-    customerUid: currentUser ? currentUser.uid : 'guest_' + Date.now(),
+    customerUid: resolvedCustomerUid,
     customerName: orderInput.customerName.trim(),
     phone: String(orderInput.phone).replace(/\D/g, ''),
     city: orderInput.city ? orderInput.city.trim() : 'Indore',
