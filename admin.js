@@ -39,6 +39,19 @@ const state = {
 // INITIALIZATION
 // --------------------------------------------------------------------------
 function initAdminApp() {
+  // Defensive guard: ensure critical admin container exists before running setup
+  const gatekeeper = document.getElementById('adminGatekeeper');
+  if (!gatekeeper) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initAdminApp, { once: true });
+    } else if (document.readyState !== 'complete') {
+      window.addEventListener('load', initAdminApp, { once: true });
+    } else {
+      setTimeout(initAdminApp, 50);
+    }
+    return;
+  }
+
   setupAdminAuth();
   setupDashboardControls();
 }
@@ -85,8 +98,8 @@ function setupAdminAuth() {
 
     if (isSeller) {
       // Unlocked Admin View
-      gatekeeper.style.display = 'none';
-      dashboard.style.display = 'flex';
+      if (gatekeeper) gatekeeper.style.display = 'none';
+      if (dashboard) dashboard.style.display = 'flex';
       if (emailDisplay) emailDisplay.textContent = user.email || 'admin@kissa.in';
 
       // Connect real-time orders feed
@@ -99,8 +112,8 @@ function setupAdminAuth() {
       }
     } else {
       // Locked Gatekeeper View
-      gatekeeper.style.display = 'flex';
-      dashboard.style.display = 'none';
+      if (gatekeeper) gatekeeper.style.display = 'flex';
+      if (dashboard) dashboard.style.display = 'none';
 
       if (state.ordersUnsubscribe) {
         state.ordersUnsubscribe();
@@ -113,12 +126,18 @@ function setupAdminAuth() {
   if (loginForm) {
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('adminEmail').value.trim();
-      const password = document.getElementById('adminPassword').value;
+      const emailInput = document.getElementById('adminEmail');
+      const passInput = document.getElementById('adminPassword');
       const submitBtn = document.getElementById('adminLoginBtn');
 
-      submitBtn.disabled = true;
-      submitBtn.innerHTML = '<span>⏳ Authenticating...</span>';
+      if (!emailInput || !passInput) return;
+      const email = emailInput.value.trim();
+      const password = passInput.value;
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span>⏳ Authenticating...</span>';
+      }
 
       try {
         const user = await loginWithEmail(email, password);
@@ -126,8 +145,10 @@ function setupAdminAuth() {
 
         if (!isSeller) {
           showAdminToast('⚠️ Access Denied: User role is not seller. Use admin@kissa.in', true);
-          submitBtn.disabled = false;
-          submitBtn.innerHTML = '<span>⚡ Enter Admin Center</span>';
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<span>⚡ Enter Admin Center</span>';
+          }
           return;
         }
 
@@ -135,8 +156,10 @@ function setupAdminAuth() {
       } catch (err) {
         showAdminToast('Authentication Error: ' + err.message, true);
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>⚡ Enter Admin Center</span>';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>⚡ Enter Admin Center</span>';
+        }
       }
     });
   }

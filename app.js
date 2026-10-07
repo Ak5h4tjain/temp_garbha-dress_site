@@ -62,6 +62,20 @@ const state = {
 // INITIALIZATION
 // --------------------------------------------------------------------------
 function initCustomerApp() {
+  // Defensive guard: ensure critical DOM container exists before running setup
+  const productGrid = document.getElementById('productGrid');
+  if (!productGrid) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initCustomerApp, { once: true });
+    } else if (document.readyState !== 'complete') {
+      window.addEventListener('load', initCustomerApp, { once: true });
+    } else {
+      // Fallback retry if elements are injected asynchronously
+      setTimeout(initCustomerApp, 50);
+    }
+    return;
+  }
+
   renderProductGrid();
   setupEventListeners();
   prefetchInventoryAvailability();
@@ -331,11 +345,13 @@ function setupEventListeners() {
   const modalBackdrop = document.getElementById('bookingModalBackdrop');
   const closeModalBtn = document.getElementById('closeModalBtn');
   const orderSuccessDoneBtn = document.getElementById('orderSuccessDoneBtn');
-  if (closeModalBtn && modalBackdrop) {
+  if (closeModalBtn) {
     closeModalBtn.addEventListener('click', closeBookingModal);
-    if (orderSuccessDoneBtn) {
-      orderSuccessDoneBtn.addEventListener('click', closeBookingModal);
-    }
+  }
+  if (orderSuccessDoneBtn) {
+    orderSuccessDoneBtn.addEventListener('click', closeBookingModal);
+  }
+  if (modalBackdrop) {
     modalBackdrop.addEventListener('click', (e) => {
       if (e.target === modalBackdrop) {
         closeBookingModal();
@@ -347,7 +363,7 @@ function setupEventListeners() {
     if (e.key === 'Escape') {
       if (modalBackdrop && modalBackdrop.classList.contains('active')) closeBookingModal();
       closeAuthModal();
-      closeSellerModal();
+      if (typeof closeSellerModal === 'function') closeSellerModal();
     }
   });
 
@@ -408,8 +424,10 @@ function setupEventListeners() {
   if (headerAuthBtn) {
     headerAuthBtn.addEventListener('click', openAuthModal);
   }
-  if (closeAuthModalBtn && authModal) {
+  if (closeAuthModalBtn) {
     closeAuthModalBtn.addEventListener('click', closeAuthModal);
+  }
+  if (authModal) {
     authModal.addEventListener('click', (e) => {
       if (e.target === authModal) closeAuthModal();
     });
@@ -421,18 +439,30 @@ function setupEventListeners() {
       authMode = 'signin';
       tabSignInBtn.classList.add('active');
       tabSignUpBtn.classList.remove('active');
-      document.getElementById('signUpFields').style.display = 'none';
-      document.getElementById('authModalTitle').textContent = 'Sign In to Kissa';
-      document.getElementById('authSubmitBtn').querySelector('span').textContent = 'Sign In';
+      const signUpFields = document.getElementById('signUpFields');
+      const authModalTitle = document.getElementById('authModalTitle');
+      const authSubmitBtn = document.getElementById('authSubmitBtn');
+      if (signUpFields) signUpFields.style.display = 'none';
+      if (authModalTitle) authModalTitle.textContent = 'Sign In to Kissa';
+      if (authSubmitBtn) {
+        const span = authSubmitBtn.querySelector('span');
+        if (span) span.textContent = 'Sign In';
+      }
     });
 
     tabSignUpBtn.addEventListener('click', () => {
       authMode = 'signup';
       tabSignUpBtn.classList.add('active');
       tabSignInBtn.classList.remove('active');
-      document.getElementById('signUpFields').style.display = 'block';
-      document.getElementById('authModalTitle').textContent = 'Create Kissa Account';
-      document.getElementById('authSubmitBtn').querySelector('span').textContent = 'Create Account';
+      const signUpFields = document.getElementById('signUpFields');
+      const authModalTitle = document.getElementById('authModalTitle');
+      const authSubmitBtn = document.getElementById('authSubmitBtn');
+      if (signUpFields) signUpFields.style.display = 'block';
+      if (authModalTitle) authModalTitle.textContent = 'Create Kissa Account';
+      if (authSubmitBtn) {
+        const span = authSubmitBtn.querySelector('span');
+        if (span) span.textContent = 'Create Account';
+      }
     });
   }
 
@@ -451,13 +481,18 @@ function setupEventListeners() {
   if (authEmailForm) {
     authEmailForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('authEmail').value.trim();
-      const password = document.getElementById('authPassword').value;
+      const emailEl = document.getElementById('authEmail');
+      const passEl = document.getElementById('authPassword');
+      if (!emailEl || !passEl) return;
+      const email = emailEl.value.trim();
+      const password = passEl.value;
 
       try {
         if (authMode === 'signup') {
-          const name = document.getElementById('authName').value.trim() || 'Customer';
-          const phone = document.getElementById('authPhone').value.trim();
+          const nameEl = document.getElementById('authName');
+          const phoneEl = document.getElementById('authPhone');
+          const name = (nameEl ? nameEl.value.trim() : '') || 'Customer';
+          const phone = phoneEl ? phoneEl.value.trim() : '';
           await registerWithEmail(name, email, password, phone, 'customer');
           showToast(`Account created! Welcome, ${name}.`);
         } else {
