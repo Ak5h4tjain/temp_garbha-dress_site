@@ -61,13 +61,20 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
+function initCustomerApp() {
   renderProductGrid();
   setupEventListeners();
   prefetchInventoryAvailability();
   initializeAuthAndOrderStreams();
   enforceAccessibleLabels();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initCustomerApp);
+} else {
+  // DOM already parsed while modules were being loaded
+  initCustomerApp();
+}
 
 // A11y Guard: Ensure all tooltip buttons (native & injected) have discernible labels
 function enforceAccessibleLabels() {

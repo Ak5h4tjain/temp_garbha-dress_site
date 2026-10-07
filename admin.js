@@ -38,10 +38,16 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
+function initAdminApp() {
   setupAdminAuth();
   setupDashboardControls();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAdminApp);
+} else {
+  initAdminApp();
+}
 
 // --------------------------------------------------------------------------
 // SECURITY & FORMATTING HELPERS

@@ -56,23 +56,30 @@ let resolvedConfig = {
   measurementId: "G-KWYY8226GB"
 };
 
-// 1. Attempt to load local gitignored credentials (development / private client)
-try {
-  const localModule = await import('./firebase-credentials.js');
-  if (localModule && localModule.firebaseCredentials && localModule.firebaseCredentials.apiKey) {
-    resolvedConfig = { ...resolvedConfig, ...localModule.firebaseCredentials };
-  }
-} catch (_) {
-  // 2. Fallback: Query Vercel serverless environment provider (/api/config)
+// Check if running on local development machine
+const isLocalEnv = typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:');
+
+if (isLocalEnv) {
+  try {
+    const localModule = await import('./firebase-credentials.js');
+    if (localModule?.firebaseCredentials?.apiKey) {
+      resolvedConfig = { ...resolvedConfig, ...localModule.firebaseCredentials };
+    }
+  } catch (_) {}
+}
+
+// In production (Vercel) or when local file is not present, fetch from /api/config
+if (!resolvedConfig.apiKey || resolvedConfig.apiKey.includes('YOUR_FIREBASE')) {
   try {
     const apiRes = await fetch('/api/config');
     if (apiRes.ok) {
       const serverConfig = await apiRes.json();
-      if (serverConfig && serverConfig.apiKey) {
+      if (serverConfig?.apiKey && !serverConfig.apiKey.includes('YOUR_FIREBASE')) {
         resolvedConfig = { ...resolvedConfig, ...serverConfig };
       }
     }
-  } catch (__) {}
+  } catch (_) {}
 }
 
 export const firebaseConfig = resolvedConfig;
