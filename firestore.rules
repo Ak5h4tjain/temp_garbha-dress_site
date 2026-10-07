@@ -98,7 +98,7 @@ service cloud.firestore {
       // Customer is STRICTLY FORBIDDEN from altering totalPayable, dressCode, or rental dates!
       allow update: if 
         // Case A: Customer submitting 12-digit UTR Transaction ID for their own order
-        ((isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid) || resource.data.customerUid.matches('guest_.*')) &&
+        ((isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid)) &&
          resource.data.status in ['Pending Payment', 'pending_payment'] &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['utrNumber', 'status', 'paymentStatus', 'utrSubmittedAt', 'updatedAt']) &&
          request.resource.data.status in ['Payment Submitted', 'payment_submitted'] &&

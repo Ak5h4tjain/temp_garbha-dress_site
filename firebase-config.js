@@ -594,122 +594,14 @@ export async function createOrderInFirestore(orderInput, currentUser, idempotenc
       throw new Error(data.error || 'Server order registration failed.');
     } else {
       const errData = await apiRes.json().catch(() => ({}));
-      if (errData.error) throw new Error(errData.error);
+      throw new Error(errData.error || `Order creation failed (HTTP ${apiRes.status}).`);
     }
   } catch (apiErr) {
-    // If it's a validation error or known server rejection, re-throw immediately
-    if (apiErr.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('NetworkError') && !apiErr.message.includes('Failed to fetch')) {
-      throw apiErr;
+    if (apiErr.message && (apiErr.message.includes('fetch') || apiErr.message.includes('NetworkError') || apiErr.message.includes('Failed to fetch'))) {
+      throw new Error('Order server is currently unavailable. Please check your internet connection and try again.');
     }
+    throw apiErr;
   }
-
-  // Fallback: Direct Modular Firestore Atomic Transaction
-  if (!db || !isFirebaseConfigured()) {
-    throw new Error('Database connection is not configured. Please ensure Firebase is initialized.');
-  }
-
-  const orderType = payload.orderType;
-  let rentalDays = 1;
-  let rentOrBuyAmount = 0;
-  let securityDeposit = 0;
-
-  if (orderType === 'RENT') {
-    const sDate = new Date(payload.startDate + 'T00:00:00');
-    const eDate = new Date(payload.endDate + 'T00:00:00');
-    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime()) || eDate < sDate) {
-      throw new Error('Invalid dates: Return date must be after pickup date.');
-    }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (sDate < today) throw new Error('Cannot book dates in the past.');
-
-    rentalDays = Math.round((eDate - sDate) / (1000 * 60 * 60 * 24)) + 1;
-    if (rentalDays > 15) throw new Error('Maximum rental duration is 15 days.');
-
-    rentOrBuyAmount = catalogItem.rentPerDay * rentalDays;
-    securityDeposit = catalogItem.securityDeposit;
-  } else {
-    rentOrBuyAmount = catalogItem.buyPrice;
-    securityDeposit = 0;
-  }
-
-  const totalPayable = rentOrBuyAmount + securityDeposit;
-  const orderId = 'ORD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
-  const nowMs = Date.now();
-  const expirationIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
-  const prodDocId = getProductDocId(dressCode);
-
-  let finalOrderDoc = null;
-
-  await runTransaction(db, async (transaction) => {
-    const prodRef = doc(db, 'products', prodDocId);
-    const prodSnap = await transaction.get(prodRef);
-
-    let prodData = prodSnap.exists()
-      ? prodSnap.data()
-      : { ...catalogItem, code: dressCode, activeBookings: [], sold: false };
-
-    if (orderType === 'BUY') {
-      if (prodData.sold === true) throw new Error('Outfit already sold.');
-      prodData.sold = true;
-    } else {
-      const currentBookings = (prodData.activeBookings || []).filter(b => {
-        if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted') return true;
-        return b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired';
-      });
-
-      for (const b of currentBookings) {
-        if (!(payload.endDate < b.startDate || payload.startDate > b.endDate)) {
-          throw new Error(`Outfit is already booked between ${b.startDate} and ${b.endDate}.`);
-        }
-      }
-
-      currentBookings.push({
-        orderId,
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        orderType: 'RENT',
-        status: 'pending',
-        expiresAt: expirationIso
-      });
-      prodData.activeBookings = currentBookings;
-    }
-
-    transaction.set(prodRef, { ...prodData, updatedAt: serverTimestamp() }, { merge: true });
-
-    finalOrderDoc = {
-      orderId,
-      idempotencyKey: idKey,
-      customerUid: resolvedUid,
-      customerName: payload.customerName,
-      phone: payload.phone,
-      city: payload.city,
-      address: payload.address,
-      dressCode,
-      dressTitle: catalogItem.title,
-      orderType,
-      startDate: payload.startDate,
-      endDate: payload.endDate,
-      rentalDays,
-      rentOrBuyAmount,
-      securityDeposit,
-      totalPayable,
-      status: 'pending_payment',
-      paymentStatus: 'unpaid',
-      utrNumber: '',
-      paymentVerified: false,
-      dispatched: false,
-      returned: false,
-      expiresAt: expirationIso,
-      createdAt: new Date().toISOString(),
-      timestamp: serverTimestamp()
-    };
-
-    const orderRef = doc(db, 'orders', orderId);
-    transaction.set(orderRef, finalOrderDoc);
-  });
-
-  return finalOrderDoc;
 }
 
 // --------------------------------------------------------------------------

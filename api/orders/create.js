@@ -78,10 +78,9 @@ export default async function handler(req, res) {
 
     // 3. Authenticate & derive customer UID from verified Firebase ID token if present
     const decodedToken = await verifyAuthToken(req);
-    let customerUid = decodedToken ? decodedToken.uid : null;
-    if (!customerUid) {
-      customerUid = rawCustomerUid ? String(rawCustomerUid).trim() : 'guest_' + Date.now();
-    }
+    const customerUid = decodedToken
+      ? decodedToken.uid
+      : ('guest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
 
     // 4. Idempotency Check
     if (idempotencyKey && typeof idempotencyKey === 'string' && idempotencyKey.length >= 8) {

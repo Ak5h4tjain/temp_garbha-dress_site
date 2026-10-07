@@ -29,7 +29,7 @@ export default async function handler(req, res) {
     const decodedToken = await verifyAuthToken(req);
     const isSeller = Boolean(
       decodedToken &&
-      (decodedToken.email === 'admin@kissa.in' || decodedToken.role === 'seller')
+      ((decodedToken.email === 'admin@kissa.in' && decodedToken.email_verified === true) || decodedToken.role === 'seller')
     );
 
     if (!isSeller) {

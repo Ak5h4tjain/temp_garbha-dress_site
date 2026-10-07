@@ -85,11 +85,40 @@ export default async function handler(req, res) {
     // 4. ATOMIC TRANSACTION: update both order AND product's activeBookings holding status
     await db.runTransaction(async (transaction) => {
       const oSnap = await transaction.get(orderRef);
-      if (!oSnap.exists) throw new Error(`Order ${orderId} not found.`);
+      if (!oSnap.exists) {
+        const notFoundErr = new Error(`Order ${orderId} not found.`);
+        notFoundErr.statusCode = 404;
+        throw notFoundErr;
+      }
+
+      // Re-validate status and expiration within transaction using latest snapshot
+      const oData = oSnap.data();
+      const txStatus = String(oData.status || '').toLowerCase();
+      if (txStatus === 'cancelled' || txStatus === 'expired') {
+        const statusErr = new Error(`Cannot submit payment: Order is ${oData.status}.`);
+        statusErr.statusCode = 400;
+        throw statusErr;
+      }
+      if (txStatus === 'payment_verified' || txStatus === 'verified & dispatched') {
+        const verifiedErr = new Error('Payment for this order has already been verified.');
+        verifiedErr.statusCode = 400;
+        throw verifiedErr;
+      }
+
+      if (oData.expiresAt && (txStatus === 'pending_payment' || txStatus === 'pending payment')) {
+        const nowMs = Date.now();
+        const expMs = new Date(oData.expiresAt).getTime();
+        if (nowMs > expMs) {
+          const expErr = new Error('Order payment window has expired. Please create a new booking.');
+          expErr.statusCode = 400;
+          throw expErr;
+        }
+      }
 
       // Update product's activeBookings to non-expiring 'payment_submitted' holding status
-      if (order.dressCode) {
-        const prodDocId = getProductDocId(order.dressCode);
+      const targetDressCode = oData.dressCode || order.dressCode;
+      if (targetDressCode) {
+        const prodDocId = getProductDocId(targetDressCode);
         const prodRef = db.collection('products').doc(prodDocId);
         const prodSnap = await transaction.get(prodRef);
 
@@ -155,7 +184,7 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('[API /api/orders/submit-utr] Error:', err);
-    return res.status(500).json({
+    return res.status(err.statusCode || 500).json({
       success: false,
       error: err.message || 'Failed to submit UTR.'
     });
