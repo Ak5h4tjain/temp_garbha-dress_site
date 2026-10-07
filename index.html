@@ -75,11 +75,6 @@
             <button type="button" id="logoutBtn" class="logout-link-btn" title="Sign Out">Logout</button>
           </div>
         </div>
-
-        <!-- Seller Hub Switcher -->
-        <button type="button" id="sellerPortalToggleBtn" class="seller-hub-btn" title="Open Seller Orders & Dispatch Hub">
-          <span>👑 Seller Hub</span>
-        </button>
         
         <a href="https://wa.me/918839395472?text=Hi%20Kissa%2C%20I%20have%20an%20enquiry%20regarding%20dress%20rentals." 
            class="whatsapp-help-btn" 
@@ -371,42 +366,6 @@
           </button>
         </form>
 
-        <div class="demo-login-box">
-          <span style="font-size:11px; color:var(--ink-secondary);">Instant Test Roles (No setup needed):</span>
-          <div style="display:flex; gap:8px; margin-top:6px;">
-            <button type="button" id="quickDemoCustBtn" class="btn-secondary" style="padding:6px 12px; font-size:12px; flex:1;">👤 Demo Customer</button>
-            <button type="button" id="quickDemoSellerBtn" class="btn-secondary" style="padding:6px 12px; font-size:12px; flex:1; border-color:var(--antique-gold); color:var(--gold-dark);">👑 Demo Seller</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ======================================================================
-       SELLER ADMIN DASHBOARD MODAL
-       ====================================================================== -->
-  <div id="sellerPortalModal" class="modal-backdrop" aria-hidden="true">
-    <div class="modal-dialog seller-modal-dialog">
-      <div class="modal-header">
-        <div class="modal-header-titles">
-          <div class="category-chip" style="background:var(--antique-gold); color:#000;">Seller Administration</div>
-          <h2 class="font-festive modal-title">Kissa Live Orders & Dispatch Hub</h2>
-        </div>
-        <button type="button" id="closeSellerModalBtn" class="modal-close-btn" aria-label="Close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
-      </div>
-
-      <div class="seller-modal-body">
-        <div class="seller-stats-bar">
-          <div class="stat-pill"><strong id="totalOrdersCount">0</strong> Total Orders</div>
-          <div class="stat-pill warning"><strong id="pendingOrdersCount">0</strong> Pending UTR Check</div>
-          <div class="stat-pill success"><strong id="dispatchedOrdersCount">0</strong> Dispatched</div>
-        </div>
-
-        <div id="sellerOrdersList" class="seller-orders-grid">
-          <!-- Populated in real-time by Firebase / App.js -->
-        </div>
       </div>
     </div>
   </div>
@@ -419,8 +378,11 @@
       <div>
         <strong style="color: #FFF;">Kissa Garbha Rentals</strong> · Handcrafted Artisan Festive Attire
       </div>
-      <div>
-        All bookings confirmed via WhatsApp & verified in real-time.
+      <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+        <span>All bookings confirmed via WhatsApp & verified in real-time.</span>
+        <a href="admin.html" class="admin-portal-link" style="color: rgba(255,255,255,0.45); text-decoration:none; font-size:12px; padding:3px 10px; border:1px solid rgba(255,255,255,0.2); border-radius:4px; transition:var(--transition);">
+          👑 Seller Admin Portal
+        </a>
       </div>
     </div>
   </footer>

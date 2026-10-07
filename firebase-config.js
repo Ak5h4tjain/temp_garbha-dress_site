@@ -65,7 +65,7 @@ try {
   auth = getAuth(app);
   db = getFirestore(app);
 } catch (err) {
-  console.warn('Firebase initialization in offline/demo mode:', err.message);
+  console.info('Firebase initialization running in offline/standalone mode:', err.message);
 }
 
 export { auth, db };
@@ -94,20 +94,45 @@ export const SELLER_ADMIN_EMAIL = 'admin@kissa.in';
 // --------------------------------------------------------------------------
 
 /**
+ * Local accounts helper for offline/standalone mode
+ */
+function getLocalUsers() {
+  try {
+    return JSON.parse(localStorage.getItem('kissa_users_db') || '[]');
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLocalUser(userData) {
+  const users = getLocalUsers();
+  const existingIdx = users.findIndex(u => u.email.toLowerCase() === userData.email.toLowerCase());
+  if (existingIdx !== -1) {
+    users[existingIdx] = { ...users[existingIdx], ...userData };
+  } else {
+    users.push(userData);
+  }
+  localStorage.setItem('kissa_users_db', JSON.stringify(users));
+}
+
+/**
  * Sign in using Google OAuth Popup
  */
 export async function loginWithGoogle() {
   if (!isFirebaseConfigured()) {
-    // Graceful offline mock for instant testing
-    const mockUser = {
-      uid: 'demo_user_google_123',
-      displayName: 'Customer (Demo)',
-      email: 'customer@gmail.com',
+    // Standard user profile for standalone/offline mode
+    const cleanEmail = 'customer@gmail.com';
+    const isSeller = cleanEmail.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase();
+    const user = {
+      uid: 'usr_g_' + Math.random().toString(36).substring(2, 10),
+      displayName: 'Customer',
+      email: cleanEmail,
       photoURL: null,
-      role: 'customer'
+      role: isSeller ? 'seller' : 'customer'
     };
-    localStorage.setItem('kissa_user', JSON.stringify(mockUser));
-    return mockUser;
+    saveLocalUser(user);
+    localStorage.setItem('kissa_user', JSON.stringify(user));
+    return user;
   }
 
   const provider = new GoogleAuthProvider();
@@ -139,22 +164,41 @@ export async function loginWithGoogle() {
  * Sign in with Email & Password
  */
 export async function loginWithEmail(email, password) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  
   if (!isFirebaseConfigured()) {
-    const isSeller = email.includes('admin');
-    const mockUser = {
-      uid: isSeller ? 'demo_seller_123' : 'demo_cust_123',
-      displayName: isSeller ? 'Kissa Admin (Seller)' : 'Kissa Customer',
-      email: email,
-      role: isSeller ? 'seller' : 'customer'
+    const isSeller = cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase() || cleanEmail.includes('admin');
+    const existingUsers = getLocalUsers();
+    let matched = existingUsers.find(u => u.email.toLowerCase() === cleanEmail);
+
+    if (!matched) {
+      // Auto-register initial user
+      matched = {
+        uid: 'usr_' + Math.random().toString(36).substring(2, 10),
+        displayName: isSeller ? 'Kissa Admin' : cleanEmail.split('@')[0],
+        email: cleanEmail,
+        role: isSeller ? 'seller' : 'customer',
+        createdAt: new Date().toISOString()
+      };
+      saveLocalUser(matched);
+    }
+
+    const sessionUser = {
+      uid: matched.uid,
+      displayName: matched.displayName,
+      email: matched.email,
+      phone: matched.phone || '',
+      role: matched.role || (isSeller ? 'seller' : 'customer')
     };
-    localStorage.setItem('kissa_user', JSON.stringify(mockUser));
-    return mockUser;
+
+    localStorage.setItem('kissa_user', JSON.stringify(sessionUser));
+    return sessionUser;
   }
 
-  const userCred = await signInWithEmailAndPassword(auth, email, password);
+  const userCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
   const user = userCred.user;
   const userDoc = await getDoc(doc(db, 'users', user.uid));
-  const role = userDoc.exists() ? (userDoc.data().role || 'customer') : (user.email === SELLER_ADMIN_EMAIL ? 'seller' : 'customer');
+  const role = userDoc.exists() ? (userDoc.data().role || 'customer') : (user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase() ? 'seller' : 'customer');
   return { ...user, role };
 }
 
@@ -162,29 +206,35 @@ export async function loginWithEmail(email, password) {
  * Register with Email, Password, Name & Phone
  */
 export async function registerWithEmail(name, email, password, phone, role = 'customer') {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanName = String(name || 'Customer').trim();
+  const cleanPhone = String(phone || '').trim();
+  const isSeller = (cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase()) || role === 'seller';
+
   if (!isFirebaseConfigured()) {
-    const mockUser = {
-      uid: 'demo_user_' + Date.now(),
-      displayName: name,
-      email: email,
-      phone: phone,
-      role: role
+    const newUser = {
+      uid: 'usr_' + Date.now().toString(36),
+      displayName: cleanName,
+      email: cleanEmail,
+      phone: cleanPhone,
+      role: isSeller ? 'seller' : 'customer',
+      createdAt: new Date().toISOString()
     };
-    localStorage.setItem('kissa_user', JSON.stringify(mockUser));
-    return mockUser;
+    saveLocalUser(newUser);
+    localStorage.setItem('kissa_user', JSON.stringify(newUser));
+    return newUser;
   }
 
-  const userCred = await createUserWithEmailAndPassword(auth, email, password);
+  const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
   const user = userCred.user;
 
-  await updateProfile(user, { displayName: name });
+  await updateProfile(user, { displayName: cleanName });
 
-  const isSeller = (email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase()) || role === 'seller';
   const profileData = {
     uid: user.uid,
-    displayName: name,
-    email: email,
-    phone: phone,
+    displayName: cleanName,
+    email: cleanEmail,
+    phone: cleanPhone,
     role: isSeller ? 'seller' : 'customer',
     createdAt: serverTimestamp()
   };
@@ -460,56 +510,6 @@ export async function returnAndRestockOrder(order) {
 // 7. REAL-TIME ORDERS LISTENER (FOR SELLER DASHBOARD & CUSTOMER ORDERS)
 // --------------------------------------------------------------------------
 
-// Realistic Seed Orders for Demonstration
-function getSeedOrders() {
-  return [
-    {
-      orderId: "ORD-NV2101",
-      customerUid: "demo_cust_guest",
-      customerName: "Pooja Sharma",
-      phone: "9826012345",
-      city: "Indore",
-      address: "Flat 302, Silver Springs, AB Road",
-      dressCode: "032026/2101",
-      dressTitle: "Navratri Special Kutchi Rabari Lehenga",
-      orderType: "RENT",
-      startDate: "2026-10-12",
-      endDate: "2026-10-14",
-      rentalDays: 3,
-      rentOrBuyAmount: 2397,
-      securityDeposit: 1500,
-      totalPayable: 3897,
-      status: "Payment Submitted",
-      utrNumber: "428190382910",
-      paymentVerified: false,
-      dispatched: false,
-      createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString()
-    },
-    {
-      orderId: "ORD-KD2105",
-      customerUid: "demo_cust_2",
-      customerName: "Rahul Verma",
-      phone: "9893054321",
-      city: "Indore",
-      address: "14/2 Scheme 54, Vijay Nagar",
-      dressCode: "032026/2105",
-      dressTitle: "Men's Royal Angrakha Kediyu Set",
-      orderType: "RENT",
-      startDate: "2026-10-10",
-      endDate: "2026-10-11",
-      rentalDays: 2,
-      rentOrBuyAmount: 1298,
-      securityDeposit: 1000,
-      totalPayable: 2298,
-      status: "Verified & Dispatched",
-      utrNumber: "519283746102",
-      paymentVerified: true,
-      dispatched: true,
-      createdAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString()
-    }
-  ];
-}
-
 /**
  * Listen to all orders for the Seller Dashboard
  */
@@ -518,9 +518,7 @@ export function subscribeToAllOrders(callback) {
     const getLocal = () => {
       const stored = localStorage.getItem('kissa_orders');
       if (!stored) {
-        const seed = getSeedOrders();
-        localStorage.setItem('kissa_orders', JSON.stringify(seed));
-        return seed;
+        return [];
       }
       try {
         return JSON.parse(stored);
@@ -532,7 +530,6 @@ export function subscribeToAllOrders(callback) {
     const notify = () => callback(getLocal());
     notify();
 
-    window.addEventListener('storage', notify);
     window.addEventListener('kissa_orders_updated', notify);
 
     return () => {

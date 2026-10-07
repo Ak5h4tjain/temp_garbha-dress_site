@@ -209,12 +209,19 @@ All outfit codes, rental prices, deposits, and sizes are configured in [`product
 
 The system includes a Cloud Firestore architecture with Role-Based Access Control (RBAC), Anti-Price-Tampering, and 12-digit UTR Verification:
 
-### 1. User & Seller Authentication
-- **Dual Auth**: Supports Google One-Tap Popup & Email/Password authentication.
-- **Role-Based Access Control**:
-  - `customer`: Can place orders, view their own order history, and submit their 12-digit payment UTR.
-  - `seller`: Admin privileges (`admin@kissa.in`), access to the **👑 Seller Hub** live order dashboard, and 1-click WhatsApp dispatch actions.
-- **Zero-Setup Demo Modes**: Includes 1-click test roles (`👤 Demo Customer` and `👑 Demo Seller`) for instant local testing without configuring cloud credentials.
+### 1. Two Dedicated Sites Architecture (User vs Admin)
+- **🛍️ Customer Storefront (`index.html`)**:
+  - Exclusively for shoppers and festive dress renters.
+  - Clean authentication (Google Sign-In & Email/Password Signup/Login).
+  - Anti-price-tampering dynamic cart, instant UPI QR generation, and 12-digit UTR submission.
+  - Zero admin controls or demo buttons visible to shoppers.
+- **👑 Dedicated Admin Portal (`admin.html`)**:
+  - Standalone, password/auth-protected command center at `/admin.html`.
+  - Restricted to store administrators (`admin@kissa.in` or role `seller`).
+  - Real-time 4-KPI operational dashboard (Total Bookings, Pending UTRs, Dispatched Outfits, Gross Revenue).
+  - 1-click clipboard copy of 12-digit customer UTR numbers.
+  - 1-click "✅ Verify Payment & Dispatch via WhatsApp" button with automated message generation.
+  - "🔄 Mark Returned & Restock" with security deposit refund notification.
 
 ### 2. Zero-Trust Anti-Price-Tampering Architecture
 - **Problem**: In naive client-side shops, users can inspect element or edit JS memory variables to buy a ₹6,000 dress for ₹1.
@@ -226,12 +233,12 @@ The system includes a Cloud Firestore architecture with Role-Based Access Contro
 2. **Step 2 (Enter UTR)**: Customer enters their 12-digit UPI Transaction / Reference ID (from GPay, PhonePe, Paytm receipt) into the verification input.
 3. The order status updates from `Pending Payment` to `Payment Submitted` in Firestore.
 
-### 4. 👑 Seller Hub & Automated WhatsApp Dispatch
-1. Seller opens **👑 Seller Hub** from the website header.
+### 4. 👑 Seller Admin Center & Automated WhatsApp Dispatch
+1. Seller opens **`admin.html`** and signs in as `admin@kissa.in`.
 2. The dashboard shows real-time stats (Total Orders, Pending UTR Check, Dispatched).
 3. The seller inspects the customer's **12-digit UTR** highlighted on the order card.
 4. With 1 click on **`[ ✅ Verify Payment & Dispatch ]`**:
-   - Order status in Firestore updates to `Verified & Dispatched`.
+   - Order status updates to `Verified & Dispatched`.
    - Automatically opens WhatsApp with a pre-filled dispatch message:
      ```text
      Namaste Aarav Patel ji! 🌸

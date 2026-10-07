@@ -4,12 +4,11 @@
  * ==========================================================================
  * 
  * Features:
- *  - Firebase Authentication (Google OAuth, Email/Password, RBAC Demo Switchers)
+ *  - Firebase Authentication (Google OAuth, Email/Password for Customers)
  *  - Zero-Trust Anti-Price-Tampering Order Creation via Cloud Firestore
  *  - Rent vs. Buy toggle with dynamic pricing & deposit logic
  *  - Instant UPI QR Code & Direct UPI payment app links (GPay/PhonePe/Paytm)
  *  - 12-Digit UTR (UPI Reference Number) Submission & Tracking
- *  - Real-time Seller Admin Hub with 1-tap WhatsApp Verification & Dispatch
  *  - Real-time date availability checking via Apps Script doGet
  */
 
@@ -24,10 +23,7 @@ import {
   logoutUser,
   subscribeToAuthState,
   createOrderInFirestore,
-  submitOrderUtr,
-  verifyAndDispatchOrder,
-  returnAndRestockOrder,
-  subscribeToAllOrders
+  submitOrderUtr
 } from './firebase-config.js';
 
 // --------------------------------------------------------------------------
@@ -59,8 +55,7 @@ const state = {
   soldDresses: [],
   currentUser: null,
   currentOrderId: null,
-  currentOrderDoc: null,
-  allOrdersCache: []
+  currentOrderDoc: null
 };
 
 // --------------------------------------------------------------------------
@@ -120,12 +115,6 @@ function initializeAuthAndOrderStreams() {
       }
     }
   });
-
-  // Listen for live orders (Seller Hub & real-time updates)
-  subscribeToAllOrders((orders) => {
-    state.allOrdersCache = orders || [];
-    renderSellerOrders(state.allOrdersCache);
-  });
 }
 
 function updateAuthHeaderUI(user) {
@@ -142,11 +131,28 @@ function updateAuthHeaderUI(user) {
     nameDisplay.textContent = user.displayName || user.email || 'Customer';
 
     const isSeller = user.role === 'seller';
-    roleBadge.textContent = isSeller ? '👑 Seller' : '👤 Customer';
+    roleBadge.textContent = isSeller ? '👑 Admin' : '👤 Customer';
     roleBadge.className = 'user-role-tag ' + (isSeller ? 'seller' : 'customer');
+
+    // Add direct link to admin portal if the logged-in user is an admin
+    let adminLink = profileBadge.querySelector('.auth-admin-link');
+    if (isSeller) {
+      if (!adminLink) {
+        adminLink = document.createElement('a');
+        adminLink.href = 'admin.html';
+        adminLink.className = 'auth-admin-link';
+        adminLink.style.cssText = 'font-size:12px; font-weight:700; color:var(--crimson); text-decoration:none; padding:2px 8px; border:1px solid var(--crimson); border-radius:4px; margin-left:6px;';
+        adminLink.textContent = 'Admin Portal →';
+        profileBadge.insertBefore(adminLink, document.getElementById('logoutBtn'));
+      }
+    } else if (adminLink) {
+      adminLink.remove();
+    }
   } else {
     authBtn.style.display = 'flex';
     profileBadge.style.display = 'none';
+    const existingAdminLink = profileBadge.querySelector('.auth-admin-link');
+    if (existingAdminLink) existingAdminLink.remove();
   }
 }
 
@@ -372,8 +378,6 @@ function setupEventListeners() {
   const tabSignUpBtn = document.getElementById('tabSignUpBtn');
   const googleAuthBtn = document.getElementById('googleAuthBtn');
   const authEmailForm = document.getElementById('authEmailForm');
-  const quickDemoCustBtn = document.getElementById('quickDemoCustBtn');
-  const quickDemoSellerBtn = document.getElementById('quickDemoSellerBtn');
   const logoutBtn = document.getElementById('logoutBtn');
 
   if (headerAuthBtn) {
@@ -442,136 +446,12 @@ function setupEventListeners() {
     });
   }
 
-  if (quickDemoCustBtn) {
-    quickDemoCustBtn.addEventListener('click', () => {
-      const demoUser = {
-        uid: 'demo_cust_guest',
-        displayName: 'Aarav Patel (Customer)',
-        email: 'aarav@gmail.com',
-        phone: '9876543210',
-        role: 'customer'
-      };
-      localStorage.setItem('kissa_user', JSON.stringify(demoUser));
-      state.currentUser = demoUser;
-      updateAuthHeaderUI(demoUser);
-      closeAuthModal();
-      showToast('Switched to Demo Customer profile.');
-    });
-  }
-
-  if (quickDemoSellerBtn) {
-    quickDemoSellerBtn.addEventListener('click', () => {
-      const demoSeller = {
-        uid: 'demo_seller_admin',
-        displayName: 'Kissa Admin (Seller)',
-        email: 'admin@kissa.in',
-        phone: '8839395472',
-        role: 'seller'
-      };
-      localStorage.setItem('kissa_user', JSON.stringify(demoSeller));
-      state.currentUser = demoSeller;
-      updateAuthHeaderUI(demoSeller);
-      closeAuthModal();
-      showToast('Switched to Demo Seller (Admin) mode!');
-    });
-  }
-
   if (logoutBtn) {
     logoutBtn.addEventListener('click', async () => {
       await logoutUser();
       state.currentUser = null;
       updateAuthHeaderUI(null);
       showToast('Signed out successfully.');
-    });
-  }
-
-  // ------------------------------------------------------------------------
-  // SELLER ADMIN HUB CONTROLS
-  // ------------------------------------------------------------------------
-  const sellerToggleBtn = document.getElementById('sellerPortalToggleBtn');
-  const sellerModal = document.getElementById('sellerPortalModal');
-  const closeSellerModalBtn = document.getElementById('closeSellerModalBtn');
-
-  if (sellerToggleBtn) {
-    sellerToggleBtn.addEventListener('click', openSellerModal);
-  }
-  if (closeSellerModalBtn && sellerModal) {
-    closeSellerModalBtn.addEventListener('click', closeSellerModal);
-    sellerModal.addEventListener('click', (e) => {
-      if (e.target === sellerModal) closeSellerModal();
-    });
-  }
-
-  // Seller card action clicks (Verify & Dispatch or Mark Returned)
-  const ordersListEl = document.getElementById('sellerOrdersList');
-  if (ordersListEl) {
-    ordersListEl.addEventListener('click', async (e) => {
-      // Handle 1-click switch to Seller from warning banner
-      const switchSellerBtn = e.target.closest('#sellerHubSwitchSellerBtn');
-      if (switchSellerBtn) {
-        const demoSeller = {
-          uid: 'demo_seller_admin',
-          displayName: 'Kissa Admin (Seller)',
-          email: 'admin@kissa.in',
-          phone: '8839395472',
-          role: 'seller'
-        };
-        localStorage.setItem('kissa_user', JSON.stringify(demoSeller));
-        state.currentUser = demoSeller;
-        updateAuthHeaderUI(demoSeller);
-        renderSellerOrders(state.allOrdersCache);
-        showToast('Switched to Seller role with dispatch authority!');
-        return;
-      }
-
-      const verifyBtn = e.target.closest('.verify-dispatch-btn');
-      const returnBtn = e.target.closest('.mark-returned-btn');
-
-      if (verifyBtn) {
-        // Strict RBAC: Only verified sellers can verify payment & dispatch
-        if (!state.currentUser || state.currentUser.role !== 'seller') {
-          showToast('🔒 Access Denied: Only authenticated Sellers can verify payments & dispatch orders. Please switch to "👑 Demo Seller".');
-          openAuthModal();
-          return;
-        }
-
-        const orderId = verifyBtn.dataset.orderId;
-        const order = state.allOrdersCache.find(o => o.orderId === orderId);
-        if (order) {
-          verifyBtn.disabled = true;
-          verifyBtn.innerHTML = '<span>⏳ Verifying & Launching WhatsApp...</span>';
-          try {
-            await verifyAndDispatchOrder(order);
-            showToast(`Order ${orderId} verified and dispatched!`);
-          } catch (err) {
-            showToast('Dispatch failed: ' + err.message);
-            verifyBtn.disabled = false;
-          }
-        }
-      }
-
-      if (returnBtn) {
-        // Strict RBAC: Only sellers can mark returned & initiate refund
-        if (!state.currentUser || state.currentUser.role !== 'seller') {
-          showToast('🔒 Access Denied: Only authenticated Sellers can mark outfits returned.');
-          openAuthModal();
-          return;
-        }
-
-        const orderId = returnBtn.dataset.orderId;
-        const order = state.allOrdersCache.find(o => o.orderId === orderId);
-        if (order) {
-          returnBtn.disabled = true;
-          returnBtn.innerHTML = '<span>⏳ Processing Return...</span>';
-          try {
-            await returnAndRestockOrder(order);
-            showToast(`Outfit marked returned & deposit refund triggered.`);
-          } catch (err) {
-            showToast('Return error: ' + err.message);
-            returnBtn.disabled = false;
-          }
-        }
-      }
     });
   }
 }
@@ -586,23 +466,6 @@ function openAuthModal() {
 
 function closeAuthModal() {
   const modal = document.getElementById('authModal');
-  if (modal) {
-    modal.classList.remove('active');
-    modal.setAttribute('aria-hidden', 'true');
-  }
-}
-
-function openSellerModal() {
-  const modal = document.getElementById('sellerPortalModal');
-  if (modal) {
-    modal.classList.add('active');
-    modal.setAttribute('aria-hidden', 'false');
-    renderSellerOrders(state.allOrdersCache);
-  }
-}
-
-function closeSellerModal() {
-  const modal = document.getElementById('sellerPortalModal');
   if (modal) {
     modal.classList.remove('active');
     modal.setAttribute('aria-hidden', 'true');
@@ -976,132 +839,6 @@ _I have completed the payment via UPI. Please find my payment screenshot attache
   document.getElementById('sendScreenshotWaBtn').href = waUrl;
 
   showToast('Order locked! Please scan QR and enter 12-digit UTR below.');
-}
-
-// --------------------------------------------------------------------------
-// RENDER SELLER ADMIN DASHBOARD
-// --------------------------------------------------------------------------
-function renderSellerOrders(orders) {
-  const container = document.getElementById('sellerOrdersList');
-  const totalCountEl = document.getElementById('totalOrdersCount');
-  const pendingCountEl = document.getElementById('pendingOrdersCount');
-  const dispatchedCountEl = document.getElementById('dispatchedOrdersCount');
-
-  if (!container) return;
-
-  const total = orders.length;
-  const pending = orders.filter(o => o.status === 'Payment Submitted' || o.status === 'Pending Payment').length;
-  const dispatched = orders.filter(o => o.status === 'Verified & Dispatched' || o.dispatched).length;
-
-  if (totalCountEl) totalCountEl.textContent = total;
-  if (pendingCountEl) pendingCountEl.textContent = pending;
-  if (dispatchedCountEl) dispatchedCountEl.textContent = dispatched;
-
-  const isSellerUser = state.currentUser && state.currentUser.role === 'seller';
-  let bannerHtml = '';
-  if (!isSellerUser) {
-    bannerHtml = `
-      <div style="background:#FFFBEB; border:1px solid #FCD34D; color:#92400E; padding:10px 14px; border-radius:8px; font-size:12px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-        <span>🔒 <strong>Read-Only Mode:</strong> You are viewing as <em>${sanitize(state.currentUser?.displayName || 'Customer / Guest')}</em>. To test seller verification and WhatsApp dispatch, switch to Seller role.</span>
-        <button type="button" id="sellerHubSwitchSellerBtn" style="background:#D97706; color:#FFF; border:none; padding:5px 12px; border-radius:4px; font-size:12px; font-weight:700; cursor:pointer;">👑 Switch to Demo Seller</button>
-      </div>
-    `;
-  }
-
-  if (orders.length === 0) {
-    container.innerHTML = bannerHtml + `
-      <div class="empty-orders-view">
-        <p style="font-size:16px; font-weight:600; margin-bottom:4px;">No orders found</p>
-        <p style="font-size:13px;">New bookings will appear here automatically in real-time.</p>
-      </div>
-    `;
-    return;
-  }
-
-  container.innerHTML = bannerHtml + orders.map(order => {
-    const isDispatched = order.status === 'Verified & Dispatched' || order.dispatched;
-    const isReturned = order.status === 'Returned';
-    const hasUtr = Boolean(order.utrNumber && order.utrNumber.trim() !== '');
-    const phoneDigits = String(order.phone || '').replace(/\D/g, '');
-
-    let badgeClass = 'pending-payment';
-    if (order.status === 'Payment Submitted') badgeClass = 'payment-submitted';
-    if (isDispatched) badgeClass = 'verified-dispatched';
-    if (isReturned) badgeClass = 'returned';
-
-    const dateDisplay = order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN', {
-      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-    }) : 'Just now';
-
-    return `
-      <div class="seller-order-card" data-order-id="${sanitize(order.orderId)}">
-        <div class="order-card-header">
-          <div class="card-id-block">
-            <span class="card-order-id">${sanitize(order.orderId)}</span>
-            <span class="card-order-date">${sanitize(dateDisplay)}</span>
-          </div>
-          <span class="status-badge ${badgeClass}">${sanitize(order.status)}</span>
-        </div>
-
-        <div class="order-card-content">
-          <!-- Col 1: Customer Details -->
-          <div class="detail-col">
-            <span class="detail-title">Customer</span>
-            <span class="detail-main">${sanitize(order.customerName)}</span>
-            <span class="detail-sub">
-              📞 <a href="tel:${phoneDigits}" style="color:var(--crimson); text-decoration:none;">${phoneDigits}</a>
-              · <a href="https://wa.me/91${phoneDigits}" target="_blank" style="color:#25D366; text-decoration:none; font-weight:600;">Chat</a>
-            </span>
-            <span class="detail-sub" style="margin-top:2px;">📍 ${sanitize(order.address)}, ${sanitize(order.city || 'Indore')}</span>
-          </div>
-
-          <!-- Col 2: Outfit & Dates -->
-          <div class="detail-col">
-            <span class="detail-title">Outfit Reserved</span>
-            <span class="detail-main">${sanitize(order.dressCode)} — ${sanitize(order.dressTitle || '')}</span>
-            <span class="detail-sub">Type: <strong>${sanitize(order.orderType)}</strong></span>
-            ${order.orderType === 'RENT' ? `<span class="detail-sub">📅 ${sanitize(order.startDate)} to ${sanitize(order.endDate)} (${order.rentalDays} Nights)</span>` : ''}
-          </div>
-
-          <!-- Col 3: Financials & UTR -->
-          <div class="detail-col">
-            <span class="detail-title">Payment & UTR Verification</span>
-            <span class="detail-main" style="color:var(--crimson);">${formatCurrency(order.totalPayable)}</span>
-            <span class="detail-sub">Rent: ${formatCurrency(order.rentOrBuyAmount)} · Deposit: ${formatCurrency(order.securityDeposit)}</span>
-            
-            ${hasUtr 
-              ? `<div class="utr-highlight-chip">🏷️ UTR: <strong>${sanitize(order.utrNumber)}</strong></div>`
-              : `<div class="utr-missing-chip">⚠️ Pending Customer UTR</div>`
-            }
-          </div>
-        </div>
-
-        <div class="order-card-actions">
-          ${!isDispatched && !isReturned ? `
-            <button type="button" class="verify-dispatch-btn" data-order-id="${sanitize(order.orderId)}" title="Verifies payment and opens WhatsApp to dispatch to customer">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.301-.15-1.78-.879-2.056-.98-.276-.1-.476-.15-.677.15-.201.3-.777.98-.952 1.18-.175.2-.351.226-.652.075-.301-.15-1.27-.468-2.42-1.493-.895-.798-1.5-1.784-1.675-2.085-.175-.3-.019-.462.132-.612.136-.135.301-.351.451-.527.151-.175.201-.3.301-.5.1-.2.05-.376-.025-.526-.075-.15-.677-1.63-.928-2.235-.245-.589-.494-.509-.677-.518-.175-.008-.376-.01-.577-.01-.201 0-.527.075-.802.376-.276.3-1.053 1.028-1.053 2.508 0 1.48 1.078 2.909 1.229 3.11.15.2 2.122 3.24 5.14 4.544.718.31 1.279.496 1.716.634.721.23 1.377.197 1.896.12.578-.087 1.78-.727 2.03-1.43.251-.703.251-1.305.176-1.43-.075-.125-.276-.2-.577-.35zM12 2C6.477 2 2 6.477 2 12c0 1.891.524 3.662 1.433 5.178L2.05 21.95l4.896-1.353A9.957 9.957 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
-              <span>✅ Verify Payment & Dispatch</span>
-            </button>
-          ` : ''}
-
-          ${isDispatched && !isReturned ? `
-            <span style="font-size:12px; font-weight:600; color:var(--emerald); display:flex; align-items:center; gap:4px;">
-              ✓ Dispatched & On Route
-            </span>
-            <button type="button" class="mark-returned-btn" data-order-id="${sanitize(order.orderId)}">
-              <span>🔄 Mark Returned & Refund Deposit</span>
-            </button>
-          ` : ''}
-
-          ${isReturned ? `
-            <span style="font-size:12px; font-weight:600; color:#3730A3;">
-              ✓ Returned & Closed
-            </span>
-          ` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
 }
 
 // --------------------------------------------------------------------------
