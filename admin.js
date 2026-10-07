@@ -47,7 +47,7 @@ let adminFallbackTimer = null;
 let hasAdminAuthSetup = false;
 let hasDashboardControlsSetup = false;
 
-function initAdminApp() {
+function initAdminApp({ force = false } = {}) {
   const gatekeeper = document.getElementById('adminGatekeeper');
 
   // If already initialized, never re-run setup
@@ -56,11 +56,11 @@ function initAdminApp() {
   }
 
   // Defensive guard: wait for critical admin container using MutationObserver & single scheduling guard
-  if (!gatekeeper) {
+  if (!gatekeeper && !force) {
     if (!isAdminInitScheduled) {
       isAdminInitScheduled = true;
 
-      const onAdminTargetReady = () => {
+      const onAdminTargetReady = ({ force: shouldForce = false } = {}) => {
         if (adminDomObserver) {
           adminDomObserver.disconnect();
           adminDomObserver = null;
@@ -70,11 +70,11 @@ function initAdminApp() {
           adminFallbackTimer = null;
         }
         isAdminInitScheduled = false;
-        initAdminApp();
+        initAdminApp({ force: shouldForce });
       };
 
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', onAdminTargetReady, { once: true });
+        document.addEventListener('DOMContentLoaded', () => onAdminTargetReady(), { once: true });
       }
 
       const rootTarget = document.body || document.documentElement;
@@ -89,7 +89,7 @@ function initAdminApp() {
 
       adminFallbackTimer = setTimeout(() => {
         console.warn('[Admin] #adminGatekeeper not found after wait period, proceeding anyway');
-        onAdminTargetReady();
+        onAdminTargetReady({ force: true });
       }, 1500);
     }
     return;

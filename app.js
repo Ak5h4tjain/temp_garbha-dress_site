@@ -70,7 +70,7 @@ let customerFallbackTimer = null;
 let hasEventListenersSetup = false;
 let hasAuthAndOrderStreamsInitialized = false;
 
-function initCustomerApp() {
+function initCustomerApp({ force = false } = {}) {
   const productGrid = document.getElementById('productGrid');
 
   // If already initialized, handle late #productGrid insertion without duplicating listeners
@@ -83,11 +83,11 @@ function initCustomerApp() {
   }
 
   // Defensive guard: wait for critical DOM container using MutationObserver & single scheduling guard
-  if (!productGrid) {
+  if (!productGrid && !force) {
     if (!isCustomerInitScheduled) {
       isCustomerInitScheduled = true;
 
-      const onTargetReady = () => {
+      const onTargetReady = ({ force: shouldForce = false } = {}) => {
         if (customerDomObserver) {
           customerDomObserver.disconnect();
           customerDomObserver = null;
@@ -97,12 +97,12 @@ function initCustomerApp() {
           customerFallbackTimer = null;
         }
         isCustomerInitScheduled = false;
-        initCustomerApp();
+        initCustomerApp({ force: shouldForce });
       };
 
       // 1. Wait for DOMContentLoaded if document is still parsing
       if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', onTargetReady, { once: true });
+        document.addEventListener('DOMContentLoaded', () => onTargetReady(), { once: true });
       }
 
       // 2. MutationObserver waits for #productGrid injection
@@ -119,7 +119,7 @@ function initCustomerApp() {
       // 3. Fallback timeout to prevent deadlock if #productGrid is not present on current page
       customerFallbackTimer = setTimeout(() => {
         console.warn('[App] #productGrid not found after wait period, proceeding with remaining setup');
-        onTargetReady();
+        onTargetReady({ force: true });
       }, 1500);
     }
     return;

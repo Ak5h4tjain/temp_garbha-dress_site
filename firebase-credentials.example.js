@@ -15,3 +15,7 @@ export const firebaseCredentials = {
   appId: "1:123456789012:web:abcdef1234567890",
   measurementId: "G-XXXXXXXXXX"
 };
+
+// Optional: local development secret key for offline admin access (only active when isLocalEnv is true)
+export const offlineAdminKey = "YOUR_SECURE_LOCAL_DEV_OFFLINE_KEY";
+

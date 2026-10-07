@@ -194,10 +194,19 @@ export const isLocalEnv = typeof window !== 'undefined' && (() => {
   return false;
 })();
 
+// Local-only offline admin key, read strictly in true local dev (isLocalEnv) from git-ignored firebase-credentials.js
+let localOfflineAdminKey = null;
+
 // Attempt local credentials import in local dev or any non-production environment
 if (isLocalEnv || !isExplicitProduction) {
   try {
     const localModule = await import('./firebase-credentials.js');
+    if (isLocalEnv && typeof localModule?.offlineAdminKey === 'string') {
+      const trimmedKey = localModule.offlineAdminKey.trim();
+      if (trimmedKey.length > 0) {
+        localOfflineAdminKey = trimmedKey;
+      }
+    }
     const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials, {
       enforceProductionIdentifiers: !isLocalEnv // True local dev (isLocalEnv) allows custom project IDs
     });
@@ -274,9 +283,6 @@ export const OFFICIAL_PRICING_MAP = PRODUCTS.reduce((acc, p) => {
 // Designated Seller Email (Has administrative verification powers)
 export const SELLER_ADMIN_EMAIL = 'admin@kissa.in';
 
-// Local-only secret key required for offline seller / administrative access
-export const LOCAL_ADMIN_OFFLINE_KEY = 'KissaAdmin@2026';
-
 /**
  * Standardized case-insensitive seller email check.
  */
@@ -298,7 +304,7 @@ export const isSellerUser = (user) => {
   if (!isFirebaseConfigured()) {
     let isOfflineVerified = false;
     try {
-      isOfflineVerified = sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
+      isOfflineVerified = isLocalEnv && sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
     } catch (_) {}
     return user.role === 'seller' && isTargetEmail && isOfflineVerified;
   }
@@ -386,7 +392,13 @@ export async function loginWithEmail(email, password) {
 
     if (isTargetSeller) {
       // Secure local check: prevent impersonation of admin@kissa.in in offline mode
-      if (!password || password !== LOCAL_ADMIN_OFFLINE_KEY) {
+      if (!isLocalEnv) {
+        throw new Error('Offline administrator access is disabled in production environments.');
+      }
+      if (!localOfflineAdminKey) {
+        throw new Error('Offline administrator access requires offlineAdminKey configured in firebase-credentials.js.');
+      }
+      if (!password || password !== localOfflineAdminKey) {
         throw new Error('Offline administrator access requires valid local passkey verification.');
       }
       try {
@@ -456,7 +468,13 @@ export async function registerWithEmail(name, email, password, phone, role = 'cu
 
   if (!isFirebaseConfigured()) {
     if (targetIsSeller) {
-      if (!password || password !== LOCAL_ADMIN_OFFLINE_KEY) {
+      if (!isLocalEnv) {
+        throw new Error('Offline administrator registration is disabled in production environments.');
+      }
+      if (!localOfflineAdminKey) {
+        throw new Error('Offline administrator access requires offlineAdminKey configured in firebase-credentials.js.');
+      }
+      if (!password || password !== localOfflineAdminKey) {
         throw new Error('Offline administrator registration requires valid local passkey verification.');
       }
       try {
@@ -519,11 +537,11 @@ export function subscribeToAuthState(callback) {
       user = stored ? JSON.parse(stored) : null;
     } catch (_) {}
 
-    // In offline mode, if stored user claims to be seller, verify passkey session flag
+    // In offline mode, if stored user claims to be seller, verify passkey session flag and isLocalEnv
     if (user && (user.role === 'seller' || isSellerEmail(user.email))) {
       let isVerified = false;
       try {
-        isVerified = sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
+        isVerified = isLocalEnv && sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
       } catch (_) {}
       if (!isVerified) {
         user.role = 'customer';
