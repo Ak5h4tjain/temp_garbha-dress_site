@@ -56,6 +56,67 @@ let resolvedConfig = {
   measurementId: "G-KWYY8226GB"
 };
 
+// Strict allowlist of permitted Firebase configuration keys
+export const ALLOWED_CONFIG_KEYS = [
+  'apiKey',
+  'authDomain',
+  'projectId',
+  'storageBucket',
+  'messagingSenderId',
+  'appId',
+  'measurementId'
+];
+
+// Expected production identifiers to prevent redirection to attacker-controlled Firebase projects
+export const EXPECTED_PROJECT_ID = 'kissa-database';
+export const EXPECTED_AUTH_DOMAIN = 'kissa-database.firebaseapp.com';
+
+/**
+ * Validates and sanitizes configuration fetched from external sources (/api/config).
+ * Refuses to merge if values do not match known production identifiers or contain invalid formats.
+ */
+export function validateAndSanitizeServerConfig(serverConfig) {
+  if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
+    return null;
+  }
+
+  // 1. Validate API Key format and ensure it's not a placeholder
+  if (
+    typeof serverConfig.apiKey !== 'string' ||
+    !serverConfig.apiKey.trim() ||
+    serverConfig.apiKey.includes('YOUR_FIREBASE') ||
+    !serverConfig.apiKey.startsWith('AIzaSy')
+  ) {
+    return null;
+  }
+
+  // 2. Strictly verify projectId matches the trusted production project ID
+  if (serverConfig.projectId && serverConfig.projectId !== EXPECTED_PROJECT_ID) {
+    console.warn(`[Security] Untrusted /api/config: projectId "${serverConfig.projectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
+    return null;
+  }
+
+  // 3. Strictly verify authDomain matches the trusted production auth domain
+  if (serverConfig.authDomain && serverConfig.authDomain !== EXPECTED_AUTH_DOMAIN) {
+    console.warn(`[Security] Untrusted /api/config: authDomain "${serverConfig.authDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
+    return null;
+  }
+
+  // 4. Strict allowlist: only extract known legitimate keys with string values
+  const sanitized = {};
+  for (const key of ALLOWED_CONFIG_KEYS) {
+    if (
+      Object.prototype.hasOwnProperty.call(serverConfig, key) &&
+      typeof serverConfig[key] === 'string' &&
+      serverConfig[key].trim().length > 0
+    ) {
+      sanitized[key] = serverConfig[key].trim();
+    }
+  }
+
+  return sanitized.apiKey ? sanitized : null;
+}
+
 // Check if running on local development machine
 const isLocalEnv = typeof window !== 'undefined' && 
   (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:');
@@ -63,8 +124,9 @@ const isLocalEnv = typeof window !== 'undefined' &&
 if (isLocalEnv) {
   try {
     const localModule = await import('./firebase-credentials.js');
-    if (localModule?.firebaseCredentials?.apiKey) {
-      resolvedConfig = { ...resolvedConfig, ...localModule.firebaseCredentials };
+    const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials);
+    if (sanitizedLocal) {
+      resolvedConfig = { ...resolvedConfig, ...sanitizedLocal };
     }
   } catch (_) {}
 }
@@ -75,8 +137,9 @@ if (!resolvedConfig.apiKey || resolvedConfig.apiKey.includes('YOUR_FIREBASE')) {
     const apiRes = await fetch('/api/config');
     if (apiRes.ok) {
       const serverConfig = await apiRes.json();
-      if (serverConfig?.apiKey && !serverConfig.apiKey.includes('YOUR_FIREBASE')) {
-        resolvedConfig = { ...resolvedConfig, ...serverConfig };
+      const sanitizedConfig = validateAndSanitizeServerConfig(serverConfig);
+      if (sanitizedConfig) {
+        resolvedConfig = { ...resolvedConfig, ...sanitizedConfig };
       }
     }
   } catch (_) {}
