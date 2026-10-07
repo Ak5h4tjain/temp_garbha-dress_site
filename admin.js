@@ -317,7 +317,7 @@ function setupDashboardControls() {
     if (!tab.dataset.listenerAttached) {
       tab.dataset.listenerAttached = 'true';
       tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         state.activeFilter = tab.dataset.filter;
         renderOrdersFeed();
