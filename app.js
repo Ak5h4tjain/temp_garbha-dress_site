@@ -17,6 +17,8 @@ import {
   isFirebaseConfigured,
   OFFICIAL_PRICING_MAP,
   SELLER_ADMIN_EMAIL,
+  isSellerEmail,
+  isSellerUser,
   loginWithGoogle,
   loginWithEmail,
   registerWithEmail,
@@ -61,41 +63,110 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
-let initRetries = 0;
-const MAX_RETRIES = 10;
+let hasCustomerAppInitialized = false;
+let isCustomerInitScheduled = false;
+let customerDomObserver = null;
+let customerFallbackTimer = null;
+let hasEventListenersSetup = false;
+let hasAuthAndOrderStreamsInitialized = false;
 
 function initCustomerApp() {
-  // Defensive guard: ensure critical DOM container exists before running setup
   const productGrid = document.getElementById('productGrid');
-  if (!productGrid) {
-    if (initRetries++ >= MAX_RETRIES) {
-      console.warn('[App] #productGrid not found after retries, proceeding with remaining setup');
-      setupEventListeners();
-      prefetchInventoryAvailability();
-      initializeAuthAndOrderStreams();
-      enforceAccessibleLabels();
-      return;
-    }
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initCustomerApp, { once: true });
-    } else if (document.readyState !== 'complete') {
-      window.addEventListener('load', initCustomerApp, { once: true });
-    } else {
-      // Fallback retry if elements are injected asynchronously
-      setTimeout(initCustomerApp, 50);
+
+  // If already initialized, handle late #productGrid insertion without duplicating listeners
+  if (hasCustomerAppInitialized) {
+    if (productGrid && !productGrid.dataset.rendered) {
+      productGrid.dataset.rendered = 'true';
+      renderProductGrid();
     }
     return;
   }
 
-  renderProductGrid();
+  // Defensive guard: wait for critical DOM container using MutationObserver & single scheduling guard
+  if (!productGrid) {
+    if (!isCustomerInitScheduled) {
+      isCustomerInitScheduled = true;
+
+      const onTargetReady = () => {
+        if (customerDomObserver) {
+          customerDomObserver.disconnect();
+          customerDomObserver = null;
+        }
+        if (customerFallbackTimer) {
+          clearTimeout(customerFallbackTimer);
+          customerFallbackTimer = null;
+        }
+        isCustomerInitScheduled = false;
+        initCustomerApp();
+      };
+
+      // 1. Wait for DOMContentLoaded if document is still parsing
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', onTargetReady, { once: true });
+      }
+
+      // 2. MutationObserver waits for #productGrid injection
+      const rootTarget = document.body || document.documentElement;
+      if (rootTarget && typeof MutationObserver !== 'undefined') {
+        customerDomObserver = new MutationObserver(() => {
+          if (document.getElementById('productGrid')) {
+            onTargetReady();
+          }
+        });
+        customerDomObserver.observe(rootTarget, { childList: true, subtree: true });
+      }
+
+      // 3. Fallback timeout to prevent deadlock if #productGrid is not present on current page
+      customerFallbackTimer = setTimeout(() => {
+        console.warn('[App] #productGrid not found after wait period, proceeding with remaining setup');
+        onTargetReady();
+      }, 1500);
+    }
+    return;
+  }
+
+  // Clean up any pending scheduling guards & observers
+  if (customerDomObserver) {
+    customerDomObserver.disconnect();
+    customerDomObserver = null;
+  }
+  if (customerFallbackTimer) {
+    clearTimeout(customerFallbackTimer);
+    customerFallbackTimer = null;
+  }
+  isCustomerInitScheduled = false;
+
+  // Mark as initialized to ensure init runs exactly once
+  hasCustomerAppInitialized = true;
+
+  if (productGrid) {
+    productGrid.dataset.rendered = 'true';
+    renderProductGrid();
+  }
   setupEventListeners();
   prefetchInventoryAvailability();
   initializeAuthAndOrderStreams();
   enforceAccessibleLabels();
+
+  // If #productGrid was missing during partial setup, observe once for late injection
+  if (!productGrid && typeof MutationObserver !== 'undefined') {
+    const lateObserver = new MutationObserver(() => {
+      const lateGrid = document.getElementById('productGrid');
+      if (lateGrid && !lateGrid.dataset.rendered) {
+        lateObserver.disconnect();
+        lateGrid.dataset.rendered = 'true';
+        renderProductGrid();
+      }
+    });
+    const root = document.body || document.documentElement;
+    if (root) {
+      lateObserver.observe(root, { childList: true, subtree: true });
+    }
+  }
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initCustomerApp);
+  document.addEventListener('DOMContentLoaded', initCustomerApp, { once: true });
 } else {
   // DOM already parsed while modules were being loaded
   initCustomerApp();
@@ -148,6 +219,9 @@ function getTodayIsoString() {
 // AUTHENTICATION & STREAM LISTENERS
 // --------------------------------------------------------------------------
 function initializeAuthAndOrderStreams() {
+  if (hasAuthAndOrderStreamsInitialized) return;
+  hasAuthAndOrderStreamsInitialized = true;
+
   // Listen for login/logout changes
   subscribeToAuthState((user) => {
     state.currentUser = user;
@@ -180,7 +254,7 @@ function updateAuthHeaderUI(user) {
     profileBadge.style.display = 'flex';
     nameDisplay.textContent = user.displayName || user.email || 'Customer';
 
-    const isSeller = user.role === 'seller';
+    const isSeller = isSellerUser(user);
     roleBadge.textContent = isSeller ? '👑 Admin' : '👤 Customer';
     roleBadge.className = 'user-role-tag ' + (isSeller ? 'seller' : 'customer');
 
@@ -293,6 +367,9 @@ function renderProductGrid() {
 // EVENT LISTENERS
 // --------------------------------------------------------------------------
 function setupEventListeners() {
+  if (hasEventListenersSetup) return;
+  hasEventListenersSetup = true;
+
   // Category Filtering
   const catButtons = document.querySelectorAll('.cat-btn');
   catButtons.forEach(btn => {

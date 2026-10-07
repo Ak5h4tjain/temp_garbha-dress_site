@@ -15,6 +15,8 @@
 import {
   isFirebaseConfigured,
   SELLER_ADMIN_EMAIL,
+  isSellerEmail,
+  isSellerUser,
   loginWithEmail,
   loginWithGoogle,
   logoutUser,
@@ -38,35 +40,81 @@ const state = {
 // --------------------------------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------------------------------
-let initRetries = 0;
-const MAX_RETRIES = 10;
+let hasAdminAppInitialized = false;
+let isAdminInitScheduled = false;
+let adminDomObserver = null;
+let adminFallbackTimer = null;
+let hasAdminAuthSetup = false;
+let hasDashboardControlsSetup = false;
 
 function initAdminApp() {
-  // Defensive guard: ensure critical admin container exists before running setup
   const gatekeeper = document.getElementById('adminGatekeeper');
+
+  // If already initialized, never re-run setup
+  if (hasAdminAppInitialized) {
+    return;
+  }
+
+  // Defensive guard: wait for critical admin container using MutationObserver & single scheduling guard
   if (!gatekeeper) {
-    if (initRetries++ >= MAX_RETRIES) {
-      console.warn('[Admin] #adminGatekeeper not found after retries, proceeding anyway');
-      setupAdminAuth();
-      setupDashboardControls();
-      return;
-    }
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initAdminApp, { once: true });
-    } else if (document.readyState !== 'complete') {
-      window.addEventListener('load', initAdminApp, { once: true });
-    } else {
-      setTimeout(initAdminApp, 50);
+    if (!isAdminInitScheduled) {
+      isAdminInitScheduled = true;
+
+      const onAdminTargetReady = () => {
+        if (adminDomObserver) {
+          adminDomObserver.disconnect();
+          adminDomObserver = null;
+        }
+        if (adminFallbackTimer) {
+          clearTimeout(adminFallbackTimer);
+          adminFallbackTimer = null;
+        }
+        isAdminInitScheduled = false;
+        initAdminApp();
+      };
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', onAdminTargetReady, { once: true });
+      }
+
+      const rootTarget = document.body || document.documentElement;
+      if (rootTarget && typeof MutationObserver !== 'undefined') {
+        adminDomObserver = new MutationObserver(() => {
+          if (document.getElementById('adminGatekeeper')) {
+            onAdminTargetReady();
+          }
+        });
+        adminDomObserver.observe(rootTarget, { childList: true, subtree: true });
+      }
+
+      adminFallbackTimer = setTimeout(() => {
+        console.warn('[Admin] #adminGatekeeper not found after wait period, proceeding anyway');
+        onAdminTargetReady();
+      }, 1500);
     }
     return;
   }
+
+  // Clean up any pending scheduling guards & observers
+  if (adminDomObserver) {
+    adminDomObserver.disconnect();
+    adminDomObserver = null;
+  }
+  if (adminFallbackTimer) {
+    clearTimeout(adminFallbackTimer);
+    adminFallbackTimer = null;
+  }
+  isAdminInitScheduled = false;
+
+  // Mark as initialized to ensure init runs exactly once
+  hasAdminAppInitialized = true;
 
   setupAdminAuth();
   setupDashboardControls();
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initAdminApp);
+  document.addEventListener('DOMContentLoaded', initAdminApp, { once: true });
 } else {
   initAdminApp();
 }
@@ -93,6 +141,9 @@ function formatCurrency(amount) {
 // ADMIN AUTHENTICATION GATEKEEPER
 // --------------------------------------------------------------------------
 function setupAdminAuth() {
+  if (hasAdminAuthSetup) return;
+  hasAdminAuthSetup = true;
+
   const gatekeeper = document.getElementById('adminGatekeeper');
   const dashboard = document.getElementById('adminDashboard');
   const loginForm = document.getElementById('adminLoginForm');
@@ -103,13 +154,13 @@ function setupAdminAuth() {
   // Listen to Auth State
   subscribeToAuthState((user) => {
     state.currentUser = user;
-    const isSeller = user && (user.role === 'seller' || (user.email && user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase()));
+    const isSeller = isSellerUser(user);
 
     if (isSeller) {
       // Unlocked Admin View
       if (gatekeeper) gatekeeper.style.display = 'none';
       if (dashboard) dashboard.style.display = 'flex';
-      if (emailDisplay) emailDisplay.textContent = user.email || 'admin@kissa.in';
+      if (emailDisplay) emailDisplay.textContent = user.email || SELLER_ADMIN_EMAIL;
 
       // Connect real-time orders feed
       if (!state.ordersUnsubscribe) {
@@ -150,10 +201,10 @@ function setupAdminAuth() {
 
       try {
         const user = await loginWithEmail(email, password);
-        const isSeller = user.role === 'seller' || user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase();
+        const isSeller = isSellerUser(user);
 
         if (!isSeller) {
-          showAdminToast('⚠️ Access Denied: User role is not seller. Use admin@kissa.in', true);
+          showAdminToast(`⚠️ Access Denied: User role is not seller. Use ${SELLER_ADMIN_EMAIL}`, true);
           if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.innerHTML = '<span>⚡ Enter Admin Center</span>';
@@ -178,10 +229,10 @@ function setupAdminAuth() {
     googleBtn.addEventListener('click', async () => {
       try {
         const user = await loginWithGoogle();
-        const isSeller = user.role === 'seller' || user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase();
+        const isSeller = isSellerUser(user);
 
         if (!isSeller) {
-          showAdminToast('Google user authenticated, but administrator role requires admin@kissa.in email.', true);
+          showAdminToast(`Google user authenticated, but administrator role requires ${SELLER_ADMIN_EMAIL} email.`, true);
           return;
         }
 
@@ -207,6 +258,8 @@ function setupAdminAuth() {
 // DASHBOARD CONTROLS (TABS, SEARCH, REFRESH)
 // --------------------------------------------------------------------------
 function setupDashboardControls() {
+  if (hasDashboardControlsSetup) return;
+  hasDashboardControlsSetup = true;
   const tabs = document.querySelectorAll('.admin-tab');
   const searchInput = document.getElementById('adminSearchInput');
   const refreshBtn = document.getElementById('adminRefreshBtn');

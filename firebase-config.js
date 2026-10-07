@@ -72,10 +72,15 @@ export const EXPECTED_PROJECT_ID = 'kissa-database';
 export const EXPECTED_AUTH_DOMAIN = 'kissa-database.firebaseapp.com';
 
 /**
- * Validates and sanitizes configuration fetched from external sources (/api/config).
- * Refuses to merge if values do not match known production identifiers or contain invalid formats.
+ * Validates and sanitizes configuration fetched from external sources (/api/config)
+ * or local credentials (firebase-credentials.js).
+ * 
+ * In production or for untrusted network sources, strictly requires projectId and authDomain
+ * to match EXPECTED_PROJECT_ID and EXPECTED_AUTH_DOMAIN.
+ * In true local dev (isLocalEnv), local credentials can use different project/authDomain
+ * while still enforcing strict allowlist, non-empty strings, and API key format checks.
  */
-export function validateAndSanitizeServerConfig(serverConfig) {
+export function validateAndSanitizeServerConfig(serverConfig, { enforceProductionIdentifiers = true } = {}) {
   if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
     return null;
   }
@@ -94,18 +99,36 @@ export function validateAndSanitizeServerConfig(serverConfig) {
     return null;
   }
 
-  // 2. Strictly verify projectId matches the trusted production project ID
+  // 2. Project ID validation
   const trimmedProjectId = typeof serverConfig.projectId === 'string' ? serverConfig.projectId.trim() : '';
-  if (trimmedProjectId && trimmedProjectId !== EXPECTED_PROJECT_ID) {
-    console.warn(`[Security] Untrusted /api/config: projectId "${trimmedProjectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
-    return null;
+  if (enforceProductionIdentifiers) {
+    // Strictly verify projectId matches the trusted production project ID
+    if (trimmedProjectId && trimmedProjectId !== EXPECTED_PROJECT_ID) {
+      console.warn(`[Security] Untrusted /api/config: projectId "${trimmedProjectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
+      return null;
+    }
+  } else {
+    // For local dev, allow custom projectId but enforce basic safe identifier format
+    if (trimmedProjectId && !/^[a-z0-9-]+$/i.test(trimmedProjectId)) {
+      console.warn(`[Config] Invalid projectId format in local credentials: "${trimmedProjectId}".`);
+      return null;
+    }
   }
 
-  // 3. Strictly verify authDomain matches the trusted production auth domain
+  // 3. Auth Domain validation
   const trimmedAuthDomain = typeof serverConfig.authDomain === 'string' ? serverConfig.authDomain.trim() : '';
-  if (trimmedAuthDomain && trimmedAuthDomain !== EXPECTED_AUTH_DOMAIN) {
-    console.warn(`[Security] Untrusted /api/config: authDomain "${trimmedAuthDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
-    return null;
+  if (enforceProductionIdentifiers) {
+    // Strictly verify authDomain matches the trusted production auth domain
+    if (trimmedAuthDomain && trimmedAuthDomain !== EXPECTED_AUTH_DOMAIN) {
+      console.warn(`[Security] Untrusted /api/config: authDomain "${trimmedAuthDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
+      return null;
+    }
+  } else {
+    // For local dev, allow custom authDomain (e.g. localhost or alternative firebase app domain)
+    if (trimmedAuthDomain && !/^[a-z0-9.-]+$/i.test(trimmedAuthDomain)) {
+      console.warn(`[Config] Invalid authDomain format in local credentials: "${trimmedAuthDomain}".`);
+      return null;
+    }
   }
 
   // 4. Strict allowlist: only extract known legitimate keys with string values
@@ -175,7 +198,9 @@ export const isLocalEnv = typeof window !== 'undefined' && (() => {
 if (isLocalEnv || !isExplicitProduction) {
   try {
     const localModule = await import('./firebase-credentials.js');
-    const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials);
+    const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials, {
+      enforceProductionIdentifiers: !isLocalEnv // True local dev (isLocalEnv) allows custom project IDs
+    });
     if (sanitizedLocal) {
       resolvedConfig = { ...resolvedConfig, ...sanitizedLocal };
     } else {
@@ -193,7 +218,9 @@ if (!activeApiKey || activeApiKey.includes('YOUR_FIREBASE')) {
     const apiRes = await fetch('/api/config');
     if (apiRes.ok) {
       const serverConfig = await apiRes.json();
-      const sanitizedConfig = validateAndSanitizeServerConfig(serverConfig);
+      const sanitizedConfig = validateAndSanitizeServerConfig(serverConfig, {
+        enforceProductionIdentifiers: true // Untrusted network config strictly enforces expected IDs
+      });
       if (sanitizedConfig) {
         resolvedConfig = { ...resolvedConfig, ...sanitizedConfig };
       } else {
@@ -247,6 +274,37 @@ export const OFFICIAL_PRICING_MAP = PRODUCTS.reduce((acc, p) => {
 // Designated Seller Email (Has administrative verification powers)
 export const SELLER_ADMIN_EMAIL = 'admin@kissa.in';
 
+// Local-only secret key required for offline seller / administrative access
+export const LOCAL_ADMIN_OFFLINE_KEY = 'KissaAdmin@2026';
+
+/**
+ * Standardized case-insensitive seller email check.
+ */
+export const isSellerEmail = (email) => {
+  return Boolean(
+    email &&
+    typeof email === 'string' &&
+    email.trim().toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase()
+  );
+};
+
+/**
+ * Determines whether a user object has verified seller/administrator privileges.
+ * In offline mode (!isFirebaseConfigured()), unverified sessions cannot claim seller role.
+ */
+export const isSellerUser = (user) => {
+  if (!user) return false;
+  const isTargetEmail = isSellerEmail(user.email);
+  if (!isFirebaseConfigured()) {
+    let isOfflineVerified = false;
+    try {
+      isOfflineVerified = sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
+    } catch (_) {}
+    return user.role === 'seller' && isTargetEmail && isOfflineVerified;
+  }
+  return user.role === 'seller' || isTargetEmail;
+};
+
 // --------------------------------------------------------------------------
 // 3. AUTHENTICATION SERVICES
 // --------------------------------------------------------------------------
@@ -264,7 +322,7 @@ function getLocalUsers() {
 
 function saveLocalUser(userData) {
   const users = getLocalUsers();
-  const existingIdx = users.findIndex(u => u.email.toLowerCase() === userData.email.toLowerCase());
+  const existingIdx = users.findIndex(u => u.email && u.email.toLowerCase() === userData.email.toLowerCase());
   if (existingIdx !== -1) {
     users[existingIdx] = { ...users[existingIdx], ...userData };
   } else {
@@ -278,15 +336,14 @@ function saveLocalUser(userData) {
  */
 export async function loginWithGoogle() {
   if (!isFirebaseConfigured()) {
-    // Standard user profile for standalone/offline mode
+    // Standard customer profile for standalone/offline mode (cannot impersonate admin)
     const cleanEmail = 'customer@gmail.com';
-    const isSeller = cleanEmail.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase();
     const user = {
       uid: 'usr_g_' + Math.random().toString(36).substring(2, 10),
       displayName: 'Customer',
       email: cleanEmail,
       photoURL: null,
-      role: isSeller ? 'seller' : 'customer'
+      role: 'customer'
     };
     saveLocalUser(user);
     localStorage.setItem('kissa_user', JSON.stringify(user));
@@ -300,7 +357,7 @@ export async function loginWithGoogle() {
   // Sync profile into Firestore 'users' collection
   const userDocRef = doc(db, 'users', user.uid);
   const userDoc = await getDoc(userDocRef);
-  const isSeller = user.email && user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase();
+  const isSeller = isSellerEmail(user.email);
 
   const profileData = {
     uid: user.uid,
@@ -325,19 +382,45 @@ export async function loginWithEmail(email, password) {
   const cleanEmail = String(email || '').trim().toLowerCase();
   
   if (!isFirebaseConfigured()) {
-    const isSeller = cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase();
+    const isTargetSeller = isSellerEmail(cleanEmail);
+
+    if (isTargetSeller) {
+      // Secure local check: prevent impersonation of admin@kissa.in in offline mode
+      if (!password || password !== LOCAL_ADMIN_OFFLINE_KEY) {
+        throw new Error('Offline administrator access requires valid local passkey verification.');
+      }
+      try {
+        sessionStorage.setItem('kissa_offline_admin_verified', 'true');
+      } catch (_) {}
+    }
+
     const existingUsers = getLocalUsers();
-    let matched = existingUsers.find(u => u.email.toLowerCase() === cleanEmail);
+    let matched = existingUsers.find(u => u.email && u.email.toLowerCase() === cleanEmail);
 
     if (!matched) {
-      // Auto-register initial user
-      matched = {
-        uid: 'usr_' + Math.random().toString(36).substring(2, 10),
-        displayName: isSeller ? 'Kissa Admin' : cleanEmail.split('@')[0],
-        email: cleanEmail,
-        role: isSeller ? 'seller' : 'customer',
-        createdAt: new Date().toISOString()
-      };
+      if (isTargetSeller) {
+        // Only register verified seller after passkey verification
+        matched = {
+          uid: 'usr_local_admin',
+          displayName: 'Kissa Admin (Offline Verified)',
+          email: cleanEmail,
+          role: 'seller',
+          createdAt: new Date().toISOString()
+        };
+        saveLocalUser(matched);
+      } else {
+        // Auto-register initial customer user
+        matched = {
+          uid: 'usr_' + Math.random().toString(36).substring(2, 10),
+          displayName: cleanEmail.split('@')[0],
+          email: cleanEmail,
+          role: 'customer',
+          createdAt: new Date().toISOString()
+        };
+        saveLocalUser(matched);
+      }
+    } else if (isTargetSeller) {
+      matched.role = 'seller';
       saveLocalUser(matched);
     }
 
@@ -346,7 +429,7 @@ export async function loginWithEmail(email, password) {
       displayName: matched.displayName,
       email: matched.email,
       phone: matched.phone || '',
-      role: matched.role || (isSeller ? 'seller' : 'customer')
+      role: isTargetSeller ? 'seller' : (matched.role || 'customer')
     };
 
     localStorage.setItem('kissa_user', JSON.stringify(sessionUser));
@@ -356,7 +439,9 @@ export async function loginWithEmail(email, password) {
   const userCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
   const user = userCred.user;
   const userDoc = await getDoc(doc(db, 'users', user.uid));
-  const role = userDoc.exists() ? (userDoc.data().role || 'customer') : (user.email.toLowerCase() === SELLER_ADMIN_EMAIL.toLowerCase() ? 'seller' : 'customer');
+  const role = userDoc.exists()
+    ? (userDoc.data().role || 'customer')
+    : (isSellerEmail(user.email) ? 'seller' : 'customer');
   return { ...user, role };
 }
 
@@ -367,15 +452,24 @@ export async function registerWithEmail(name, email, password, phone, role = 'cu
   const cleanEmail = String(email || '').trim().toLowerCase();
   const cleanName = String(name || 'Customer').trim();
   const cleanPhone = String(phone || '').trim();
-  const isSeller = (cleanEmail === SELLER_ADMIN_EMAIL.toLowerCase()) || role === 'seller';
+  const targetIsSeller = isSellerEmail(cleanEmail) || role === 'seller';
 
   if (!isFirebaseConfigured()) {
+    if (targetIsSeller) {
+      if (!password || password !== LOCAL_ADMIN_OFFLINE_KEY) {
+        throw new Error('Offline administrator registration requires valid local passkey verification.');
+      }
+      try {
+        sessionStorage.setItem('kissa_offline_admin_verified', 'true');
+      } catch (_) {}
+    }
+
     const newUser = {
       uid: 'usr_' + Date.now().toString(36),
       displayName: cleanName,
       email: cleanEmail,
       phone: cleanPhone,
-      role: isSeller ? 'seller' : 'customer',
+      role: targetIsSeller ? 'seller' : 'customer',
       createdAt: new Date().toISOString()
     };
     saveLocalUser(newUser);
@@ -393,7 +487,7 @@ export async function registerWithEmail(name, email, password, phone, role = 'cu
     displayName: cleanName,
     email: cleanEmail,
     phone: cleanPhone,
-    role: isSeller ? 'seller' : 'customer',
+    role: targetIsSeller ? 'seller' : 'customer',
     createdAt: serverTimestamp()
   };
 
@@ -406,6 +500,9 @@ export async function registerWithEmail(name, email, password, phone, role = 'cu
  */
 export async function logoutUser() {
   localStorage.removeItem('kissa_user');
+  try {
+    sessionStorage.removeItem('kissa_offline_admin_verified');
+  } catch (_) {}
   if (isFirebaseConfigured() && auth) {
     await signOut(auth);
   }
@@ -416,8 +513,24 @@ export async function logoutUser() {
  */
 export function subscribeToAuthState(callback) {
   if (!isFirebaseConfigured()) {
-    const stored = localStorage.getItem('kissa_user');
-    callback(stored ? JSON.parse(stored) : null);
+    let user = null;
+    try {
+      const stored = localStorage.getItem('kissa_user');
+      user = stored ? JSON.parse(stored) : null;
+    } catch (_) {}
+
+    // In offline mode, if stored user claims to be seller, verify passkey session flag
+    if (user && (user.role === 'seller' || isSellerEmail(user.email))) {
+      let isVerified = false;
+      try {
+        isVerified = sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
+      } catch (_) {}
+      if (!isVerified) {
+        user.role = 'customer';
+      }
+    }
+
+    callback(user);
     return () => {};
   }
 
@@ -425,7 +538,9 @@ export function subscribeToAuthState(callback) {
     if (firebaseUser) {
       try {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        const role = userDoc.exists() ? (userDoc.data().role || 'customer') : (firebaseUser.email === SELLER_ADMIN_EMAIL ? 'seller' : 'customer');
+        const role = userDoc.exists()
+          ? (userDoc.data().role || 'customer')
+          : (isSellerEmail(firebaseUser.email) ? 'seller' : 'customer');
         const phone = userDoc.exists() ? (userDoc.data().phone || '') : '';
         const fullUser = {
           uid: firebaseUser.uid,
