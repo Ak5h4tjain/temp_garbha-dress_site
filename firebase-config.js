@@ -597,7 +597,16 @@ export async function createOrderInFirestore(orderInput, currentUser, idempotenc
       throw new Error(errData.error || `Order creation failed (HTTP ${apiRes.status}).`);
     }
   } catch (apiErr) {
-    if (apiErr.message && (apiErr.message.includes('fetch') || apiErr.message.includes('NetworkError') || apiErr.message.includes('Failed to fetch'))) {
+    const isNetworkError = (apiErr instanceof TypeError) ||
+      apiErr?.name === 'TypeError' ||
+      Boolean(apiErr?.message && (
+        apiErr.message.includes('fetch') ||
+        apiErr.message.includes('NetworkError') ||
+        apiErr.message.includes('Failed to fetch') ||
+        apiErr.message.includes('Load failed')
+      ));
+
+    if (isNetworkError) {
       throw new Error('Order server is currently unavailable. Please check your internet connection and try again.');
     }
     throw apiErr;
@@ -643,7 +652,16 @@ export async function submitOrderUtr(orderId, rawUtr) {
       throw new Error(errData.error || `Server rejected UTR submission (HTTP ${apiRes.status}).`);
     }
   } catch (err) {
-    if (err.message && (err.message.includes('fetch') || err.message.includes('Network') || err.message.includes('Failed to fetch'))) {
+    const isNetworkError = (err instanceof TypeError) ||
+      err?.name === 'TypeError' ||
+      Boolean(err?.message && (
+        err.message.includes('fetch') ||
+        err.message.includes('Network') ||
+        err.message.includes('Failed to fetch') ||
+        err.message.includes('Load failed')
+      ));
+
+    if (isNetworkError) {
       throw new Error('Payment verification server is currently unreachable. Please check your internet connection and try submitting your UTR again.');
     }
     throw err;

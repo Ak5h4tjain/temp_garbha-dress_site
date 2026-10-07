@@ -105,6 +105,16 @@ export default async function handler(req, res) {
           throw err;
         }
 
+        if ((curStatus === 'pending_payment' || curStatus === 'pending payment') && oData.expiresAt) {
+          const nowMs = Date.now();
+          const expMs = new Date(oData.expiresAt).getTime();
+          if (nowMs > expMs) {
+            const err = new Error('Cannot verify & dispatch: Order payment window has expired.');
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
         const targetDressCode = oData.dressCode || dressCode;
         const targetProdDocId = getProductDocId(targetDressCode);
         const productRef = db.collection('products').doc(targetProdDocId);
