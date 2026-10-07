@@ -38,8 +38,21 @@ export default async function handler(req, res) {
         const prodDocId = getProductDocId(dressCode);
 
         try {
+          let didExpire = false;
           await db.runTransaction(async (transaction) => {
-            const productRef = db.collection('products').doc(prodDocId);
+            const oRef = db.collection('orders').doc(orderId);
+            const oSnap = await transaction.get(oRef);
+            if (!oSnap.exists) return;
+
+            const oData = oSnap.data();
+            const curStatus = String(oData.status || '').toLowerCase();
+            if (curStatus !== 'pending_payment' && curStatus !== 'pending payment') {
+              return;
+            }
+
+            const targetDressCode = oData.dressCode || dressCode;
+            const targetProdDocId = getProductDocId(targetDressCode);
+            const productRef = db.collection('products').doc(targetProdDocId);
             const prodSnap = await transaction.get(productRef);
 
             if (prodSnap.exists) {
@@ -49,22 +62,24 @@ export default async function handler(req, res) {
                 activeBookings: remainingBookings,
                 updatedAt: FieldValue.serverTimestamp()
               };
-              if (order.orderType === 'BUY') {
+              if (oData.orderType === 'BUY' || order.orderType === 'BUY') {
                 updateFields.sold = false;
               }
               transaction.set(productRef, updateFields, { merge: true });
             }
 
-            const oRef = db.collection('orders').doc(orderId);
             transaction.update(oRef, {
               status: 'expired',
               paymentStatus: 'expired',
               expiredAt: nowIso,
               updatedAt: FieldValue.serverTimestamp()
             });
+            didExpire = true;
           });
 
-          expiredOrderIds.push(orderId);
+          if (didExpire) {
+            expiredOrderIds.push(orderId);
+          }
         } catch (err) {
           console.warn(`[Expire Orders] Failed to expire order ${orderId}:`, err.message);
         }

@@ -621,7 +621,7 @@ export async function submitOrderUtr(orderId, rawUtr) {
     } catch (_) {}
   }
 
-  // 1. Try serverless backend
+  // Serverless backend authoritative UTR submission
   try {
     const apiRes = await fetch('/api/orders/submit-utr', {
       method: 'POST',
@@ -637,51 +637,17 @@ export async function submitOrderUtr(orderId, rawUtr) {
       if (data.success) {
         return { orderId, utrNumber: cleanUtr, status: 'payment_submitted' };
       }
-    } else if (apiRes.status >= 400 && apiRes.status < 500) {
-      // 4xx client errors must propagate immediately without fallback
+      throw new Error(data.error || 'Server rejected UTR submission.');
+    } else {
       const errData = await apiRes.json().catch(() => ({}));
       throw new Error(errData.error || `Server rejected UTR submission (HTTP ${apiRes.status}).`);
     }
   } catch (err) {
-    if (err.message && !err.message.includes('fetch') && !err.message.includes('Network') && !err.message.includes('Failed to fetch')) {
-      throw err;
+    if (err.message && (err.message.includes('fetch') || err.message.includes('Network') || err.message.includes('Failed to fetch'))) {
+      throw new Error('Payment verification server is currently unreachable. Please check your internet connection and try submitting your UTR again.');
     }
-    console.warn('Network issue reaching /api/orders/submit-utr, attempting Firestore fallback:', err.message);
+    throw err;
   }
-
-  // 2. Direct Firestore fallback (network failure only)
-  if (!db || !isFirebaseConfigured()) {
-    throw new Error('Database is currently unreachable. Could not submit UTR.');
-  }
-
-  const orderRef = doc(db, 'orders', orderId);
-  const oSnap = await getDoc(orderRef);
-  if (oSnap.exists()) {
-    const oData = oSnap.data();
-    if (oData.dressCode) {
-      const prodRef = doc(db, 'products', getProductDocId(oData.dressCode));
-      const pSnap = await getDoc(prodRef);
-      if (pSnap.exists()) {
-        const bookings = (pSnap.data().activeBookings || []).map(b => {
-          if (b.orderId === orderId) {
-            return { ...b, status: 'payment_submitted', utrNumber: cleanUtr };
-          }
-          return b;
-        });
-        await updateDoc(prodRef, { activeBookings: bookings, updatedAt: serverTimestamp() }).catch(() => {});
-      }
-    }
-  }
-
-  await updateDoc(orderRef, {
-    utrNumber: cleanUtr,
-    status: 'Payment Submitted',
-    paymentStatus: 'submitted',
-    utrSubmittedAt: new Date().toISOString(),
-    updatedAt: serverTimestamp()
-  });
-
-  return { orderId, utrNumber: cleanUtr, status: 'Payment Submitted' };
 }
 
 // --------------------------------------------------------------------------

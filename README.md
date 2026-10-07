@@ -178,7 +178,7 @@ Customer and administrative user profiles:
 Configure these environment variables in your Vercel Project Settings:
 
 ```env
-# Firebase Configuration
+# Public Firebase SDK Configuration (Browser & Frontend)
 FIREBASE_API_KEY=AIzaSy...
 FIREBASE_AUTH_DOMAIN=kissa-database.firebaseapp.com
 FIREBASE_PROJECT_ID=kissa-database
@@ -187,7 +187,14 @@ FIREBASE_MESSAGING_SENDER_ID=1098932701632
 FIREBASE_APP_ID=1:1098932701632:web:8848e52891835990116025
 FIREBASE_MEASUREMENT_ID=G-KWYY8226GB
 
-# Optional Telegram Notification Bot
+# Firebase Admin SDK Credentials (Required for Serverless Endpoints in api/_firebase.js)
+# Option A: Full Service Account JSON string
+FIREBASE_SERVICE_ACCOUNT={"type":"service_account","project_id":"kissa-database",...}
+# OR Option B: Individual Client Email & Private Key
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@kissa-database.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+
+# Optional Telegram Notification Bot (Store Owner Real-Time Alerts)
 TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN_FROM_BOTFATHER
 TELEGRAM_CHAT_ID=YOUR_TELEGRAM_CHAT_ID
 ```

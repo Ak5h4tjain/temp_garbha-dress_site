@@ -141,6 +141,21 @@ export default async function handler(req, res) {
           throw new Error('This outfit has already been purchased and is no longer available for sale.');
         }
 
+        // Reject purchases when activeBookings contains a confirmed, dispatched, or unexpired pending rental
+        const activeRentals = (productData.activeBookings || []).filter(b => {
+          if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted') {
+            return true;
+          }
+          if (b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired') {
+            return true;
+          }
+          return false;
+        });
+
+        if (activeRentals.length > 0) {
+          throw new Error('This outfit currently has active rental bookings and cannot be purchased.');
+        }
+
         rentOrBuyAmount = Number(productData.buyPrice || catalogItem.buyPrice);
         securityDeposit = 0;
         totalPayable = rentOrBuyAmount;
@@ -149,6 +164,10 @@ export default async function handler(req, res) {
         if (productData.totalStock) productData.totalStock = Math.max(0, productData.totalStock - 1);
 
       } else {
+        if (productData.sold === true) {
+          throw new Error('This outfit has been sold and is no longer available for rental.');
+        }
+
         const rentRate = Number(productData.rentPerDay || catalogItem.rentPerDay);
         const depositRate = Number(productData.securityDeposit || catalogItem.securityDeposit);
 

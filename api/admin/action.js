@@ -90,7 +90,24 @@ export default async function handler(req, res) {
     // ------------------------------------------------------------------------
     if (action === 'verify_and_dispatch') {
       await db.runTransaction(async (transaction) => {
-        const productRef = db.collection('products').doc(prodDocId);
+        const oSnap = await transaction.get(orderRef);
+        if (!oSnap.exists) {
+          const err = new Error(`Order ${orderId} not found.`);
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const oData = oSnap.data();
+        const curStatus = String(oData.status || '').toLowerCase();
+        if (curStatus !== 'payment_submitted' && curStatus !== 'payment submitted' && curStatus !== 'pending_payment' && curStatus !== 'pending payment') {
+          const err = new Error(`Cannot verify & dispatch: Order is currently "${oData.status}". Allowed statuses: payment_submitted or pending_payment.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const targetDressCode = oData.dressCode || dressCode;
+        const targetProdDocId = getProductDocId(targetDressCode);
+        const productRef = db.collection('products').doc(targetProdDocId);
         const prodSnap = await transaction.get(productRef);
 
         if (prodSnap.exists) {
@@ -160,7 +177,24 @@ export default async function handler(req, res) {
     // ------------------------------------------------------------------------
     if (action === 'return_and_restock') {
       await db.runTransaction(async (transaction) => {
-        const productRef = db.collection('products').doc(prodDocId);
+        const oSnap = await transaction.get(orderRef);
+        if (!oSnap.exists) {
+          const err = new Error(`Order ${orderId} not found.`);
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const oData = oSnap.data();
+        const curStatus = String(oData.status || '').toLowerCase();
+        if (curStatus !== 'verified & dispatched') {
+          const err = new Error(`Cannot mark returned: Order is currently "${oData.status}". Allowed status: Verified & Dispatched.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const targetDressCode = oData.dressCode || dressCode;
+        const targetProdDocId = getProductDocId(targetDressCode);
+        const productRef = db.collection('products').doc(targetProdDocId);
         const prodSnap = await transaction.get(productRef);
 
         if (prodSnap.exists) {
@@ -171,7 +205,7 @@ export default async function handler(req, res) {
             activeBookings: remainingBookings,
             updatedAt: FieldValue.serverTimestamp()
           };
-          if (order.orderType === 'BUY') {
+          if (oData.orderType === 'BUY' || order.orderType === 'BUY') {
             updateFields.sold = false;
           }
           transaction.set(productRef, updateFields, { merge: true });
@@ -229,7 +263,25 @@ export default async function handler(req, res) {
     // ------------------------------------------------------------------------
     if (action === 'cancel_order') {
       await db.runTransaction(async (transaction) => {
-        const productRef = db.collection('products').doc(prodDocId);
+        const oSnap = await transaction.get(orderRef);
+        if (!oSnap.exists) {
+          const err = new Error(`Order ${orderId} not found.`);
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const oData = oSnap.data();
+        const curStatus = String(oData.status || '').toLowerCase();
+        const isPreDispatch = ['pending_payment', 'pending payment', 'payment_submitted', 'payment submitted', 'pending'].includes(curStatus);
+        if (!isPreDispatch) {
+          const err = new Error(`Cannot cancel: Order is currently "${oData.status}". Only pre-dispatch orders can be cancelled.`);
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const targetDressCode = oData.dressCode || dressCode;
+        const targetProdDocId = getProductDocId(targetDressCode);
+        const productRef = db.collection('products').doc(targetProdDocId);
         const prodSnap = await transaction.get(productRef);
 
         if (prodSnap.exists) {
@@ -239,7 +291,7 @@ export default async function handler(req, res) {
             activeBookings: remainingBookings,
             updatedAt: FieldValue.serverTimestamp()
           };
-          if (order.orderType === 'BUY') {
+          if (oData.orderType === 'BUY' || order.orderType === 'BUY') {
             updateFields.sold = false;
           }
           transaction.set(productRef, updateFields, { merge: true });
@@ -264,7 +316,7 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('[API /api/admin/action] Error:', err);
-    return res.status(500).json({
+    return res.status(err.statusCode || 500).json({
       success: false,
       error: err.message || 'Admin action failed.'
     });

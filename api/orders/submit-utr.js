@@ -63,16 +63,16 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Status and expiration validation
+    // 3. Status and expiration validation: only allow pending_payment / pending payment
     const currentStatus = String(order.status || '').toLowerCase();
-    if (currentStatus === 'cancelled' || currentStatus === 'expired') {
-      return res.status(400).json({ success: false, error: `Cannot submit payment: Order is ${order.status}.` });
-    }
-    if (currentStatus === 'payment_verified' || currentStatus === 'verified & dispatched') {
-      return res.status(400).json({ success: false, error: 'Payment for this order has already been verified.' });
+    if (currentStatus !== 'pending_payment' && currentStatus !== 'pending payment') {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot submit payment: Order is currently "${order.status || 'unknown'}". Only pending payment orders accept UTR submissions.`
+      });
     }
 
-    if (order.expiresAt && (currentStatus === 'pending_payment' || currentStatus === 'pending payment')) {
+    if (order.expiresAt) {
       const nowMs = Date.now();
       const expMs = new Date(order.expiresAt).getTime();
       if (nowMs > expMs) {
@@ -94,18 +94,13 @@ export default async function handler(req, res) {
       // Re-validate status and expiration within transaction using latest snapshot
       const oData = oSnap.data();
       const txStatus = String(oData.status || '').toLowerCase();
-      if (txStatus === 'cancelled' || txStatus === 'expired') {
-        const statusErr = new Error(`Cannot submit payment: Order is ${oData.status}.`);
+      if (txStatus !== 'pending_payment' && txStatus !== 'pending payment') {
+        const statusErr = new Error(`Cannot submit payment: Order is currently "${oData.status || 'unknown'}". Only pending payment orders accept UTR submissions.`);
         statusErr.statusCode = 400;
         throw statusErr;
       }
-      if (txStatus === 'payment_verified' || txStatus === 'verified & dispatched') {
-        const verifiedErr = new Error('Payment for this order has already been verified.');
-        verifiedErr.statusCode = 400;
-        throw verifiedErr;
-      }
 
-      if (oData.expiresAt && (txStatus === 'pending_payment' || txStatus === 'pending payment')) {
+      if (oData.expiresAt) {
         const nowMs = Date.now();
         const expMs = new Date(oData.expiresAt).getTime();
         if (nowMs > expMs) {
