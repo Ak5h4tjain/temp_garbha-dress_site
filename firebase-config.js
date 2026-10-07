@@ -2,16 +2,17 @@
  * ==========================================================================
  * KISSA GARBHA RENTALS - FIREBASE CONFIGURATION & SERVICE LAYER
  * ==========================================================================
- * 
- * Provides:
- *  - Firebase App, Auth & Cloud Firestore initialization
- *  - Customer & Seller Authentication (Google Sign-In & Email/Password)
- *  - Server-Validated Order Creation (Zero-Trust Anti-Price-Tampering)
- *  - 12-Digit UTR (Transaction ID) Submission & Tracking
- *  - Seller Dashboard real-time listeners & 1-tap WhatsApp dispatch triggers
+ * Single Source of Truth Architecture:
+ *  - Firebase App, Auth & Cloud Firestore Modular SDK initialization
+ *  - Zero-Trust Server-Authoritative Order Creation (Anti-Price-Tampering)
+ *  - ACID Concurrency & Double-Booking Prevention
+ *  - Real-time Inventory & Active Bookings Management
+ *  - 12-Digit UTR Payment Submission & Tracking
+ *  - Seller Command Center Real-Time Sync & 1-Tap WhatsApp Actions
+ *  - Strict Zero-Dependency on Google Sheets / Apps Script / localStorage DB
  */
 
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { 
   getAuth, 
   signInWithPopup, 
@@ -36,16 +37,15 @@ import {
   orderBy, 
   onSnapshot, 
   serverTimestamp,
-  limit
+  limit,
+  runTransaction
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 import { PRODUCTS } from './products.js';
 
 // --------------------------------------------------------------------------
-// 1. FIREBASE PROJECT CONFIGURATION (GIT-SAFE & PROTECTED)
+// 1. FIREBASE PROJECT CONFIGURATION
 // --------------------------------------------------------------------------
-// Default placeholder template; real API keys are securely loaded from
-// gitignored `firebase-credentials.js` locally or `/api/config` in production.
 let resolvedConfig = {
   apiKey: "AIzaSy_YOUR_FIREBASE_API_KEY",
   authDomain: "kissa-database.firebaseapp.com",
@@ -56,7 +56,6 @@ let resolvedConfig = {
   measurementId: "G-KWYY8226GB"
 };
 
-// Strict allowlist of permitted Firebase configuration keys
 export const ALLOWED_CONFIG_KEYS = [
   'apiKey',
   'authDomain',
@@ -67,18 +66,12 @@ export const ALLOWED_CONFIG_KEYS = [
   'measurementId'
 ];
 
-// Expected production identifiers to prevent redirection to attacker-controlled Firebase projects
 export const EXPECTED_PROJECT_ID = 'kissa-database';
 export const EXPECTED_AUTH_DOMAIN = 'kissa-database.firebaseapp.com';
 
 /**
  * Validates and sanitizes configuration fetched from external sources (/api/config)
  * or local credentials (firebase-credentials.js).
- * 
- * In production or for untrusted network sources, strictly requires projectId and authDomain
- * to match EXPECTED_PROJECT_ID and EXPECTED_AUTH_DOMAIN.
- * In true local dev (isLocalEnv), local credentials can use different project/authDomain
- * while still enforcing strict allowlist, non-empty strings, and API key format checks.
  */
 export function validateAndSanitizeServerConfig(serverConfig, { enforceProductionIdentifiers = true } = {}) {
   if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
@@ -102,13 +95,11 @@ export function validateAndSanitizeServerConfig(serverConfig, { enforceProductio
   // 2. Project ID validation
   const trimmedProjectId = typeof serverConfig.projectId === 'string' ? serverConfig.projectId.trim() : '';
   if (enforceProductionIdentifiers) {
-    // Strictly verify projectId matches the trusted production project ID
     if (trimmedProjectId && trimmedProjectId !== EXPECTED_PROJECT_ID) {
-      console.warn(`[Security] Untrusted /api/config: projectId "${trimmedProjectId}" does not match expected "${EXPECTED_PROJECT_ID}". Refusing to merge.`);
+      console.warn(`[Security] Untrusted config: projectId "${trimmedProjectId}" does not match expected "${EXPECTED_PROJECT_ID}".`);
       return null;
     }
   } else {
-    // For local dev, allow custom projectId but enforce basic safe identifier format
     if (trimmedProjectId && !/^[a-z0-9-]+$/i.test(trimmedProjectId)) {
       console.warn(`[Config] Invalid projectId format in local credentials: "${trimmedProjectId}".`);
       return null;
@@ -118,20 +109,18 @@ export function validateAndSanitizeServerConfig(serverConfig, { enforceProductio
   // 3. Auth Domain validation
   const trimmedAuthDomain = typeof serverConfig.authDomain === 'string' ? serverConfig.authDomain.trim() : '';
   if (enforceProductionIdentifiers) {
-    // Strictly verify authDomain matches the trusted production auth domain
     if (trimmedAuthDomain && trimmedAuthDomain !== EXPECTED_AUTH_DOMAIN) {
-      console.warn(`[Security] Untrusted /api/config: authDomain "${trimmedAuthDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}". Refusing to merge.`);
+      console.warn(`[Security] Untrusted config: authDomain "${trimmedAuthDomain}" does not match expected "${EXPECTED_AUTH_DOMAIN}".`);
       return null;
     }
   } else {
-    // For local dev, allow custom authDomain (e.g. localhost or alternative firebase app domain)
     if (trimmedAuthDomain && !/^[a-z0-9.-]+$/i.test(trimmedAuthDomain)) {
       console.warn(`[Config] Invalid authDomain format in local credentials: "${trimmedAuthDomain}".`);
       return null;
     }
   }
 
-  // 4. Strict allowlist: only extract known legitimate keys with string values
+  // 4. Strict allowlist
   const sanitized = {};
   for (const key of ALLOWED_CONFIG_KEYS) {
     if (
@@ -148,16 +137,15 @@ export function validateAndSanitizeServerConfig(serverConfig, { enforceProductio
   return sanitized.apiKey ? sanitized : null;
 }
 
-// Explicit production deployment detection (e.g. Vercel hosted preview or production domain)
+// Explicit production deployment detection
 export const isExplicitProduction = typeof window !== 'undefined' && 
   (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'kissa.in' || window.location.hostname.endsWith('.kissa.in'));
 
-// Check if running in a local/development environment (covers LAN IPs, 0.0.0.0, dev flags, and mDNS)
+// Check if running in a local development environment
 export const isLocalEnv = typeof window !== 'undefined' && (() => {
   const { hostname, protocol, search } = window.location;
   if (protocol === 'file:') return true;
 
-  // 1. Direct matches for standard loopback, wildcard, and local hostnames
   if (
     hostname === 'localhost' ||
     hostname === '0.0.0.0' ||
@@ -172,17 +160,13 @@ export const isLocalEnv = typeof window !== 'undefined' && (() => {
     return true;
   }
 
-  // 2. Private IPv4 ranges (RFC 1918 & loopback):
-  //    127.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12
   const isPrivateIp = /^(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/.test(hostname);
   if (isPrivateIp) return true;
 
-  // 3. Explicit dev overrides via URL parameter (only honored on non-production hosts)
   if (!isExplicitProduction && search && (search.includes('env=local') || search.includes('dev=1') || search.includes('local=1'))) {
     return true;
   }
 
-  // 4. Explicit dev flag in localStorage (only honored on non-production hosts)
   if (!isExplicitProduction) {
     try {
       if (localStorage.getItem('kissa_env') === 'local' || localStorage.getItem('kissa_dev_mode') === 'true') {
@@ -194,10 +178,9 @@ export const isLocalEnv = typeof window !== 'undefined' && (() => {
   return false;
 })();
 
-// Local-only offline admin key, read strictly in true local dev (isLocalEnv) from git-ignored firebase-credentials.js
 let localOfflineAdminKey = null;
 
-// Attempt local credentials import in local dev or any non-production environment
+// Attempt local credentials import in development
 if (isLocalEnv || !isExplicitProduction) {
   try {
     const localModule = await import('./firebase-credentials.js');
@@ -212,16 +195,12 @@ if (isLocalEnv || !isExplicitProduction) {
       }
     }
     const sanitizedLocal = validateAndSanitizeServerConfig(localModule?.firebaseCredentials, {
-      enforceProductionIdentifiers: !isLocalEnv // True local dev (isLocalEnv) allows custom project IDs
+      enforceProductionIdentifiers: !isLocalEnv
     });
     if (sanitizedLocal) {
       resolvedConfig = { ...resolvedConfig, ...sanitizedLocal };
-    } else {
-      console.warn('[Config] Local credentials in firebase-credentials.js failed validation or were empty.');
     }
-  } catch (err) {
-    console.warn('[Config] Local credentials import (./firebase-credentials.js) failed or file not found:', err.message || err);
-  }
+  } catch (_) {}
 }
 
 // In production (Vercel) or when local file is not present, fetch from /api/config
@@ -232,24 +211,17 @@ if (!activeApiKey || activeApiKey.includes('YOUR_FIREBASE')) {
     if (apiRes.ok) {
       const serverConfig = await apiRes.json();
       const sanitizedConfig = validateAndSanitizeServerConfig(serverConfig, {
-        enforceProductionIdentifiers: true // Untrusted network config strictly enforces expected IDs
+        enforceProductionIdentifiers: true
       });
       if (sanitizedConfig) {
         resolvedConfig = { ...resolvedConfig, ...sanitizedConfig };
-      } else {
-        console.warn('[Config] Server config from /api/config failed validation or was missing valid keys.');
       }
-    } else {
-      console.warn(`[Config] Failed to fetch /api/config: HTTP ${apiRes.status} ${apiRes.statusText}`);
     }
-  } catch (err) {
-    console.warn('[Config] Network error while fetching /api/config:', err.message || err);
-  }
+  } catch (_) {}
 }
 
 export const firebaseConfig = resolvedConfig;
 
-// Check if credentials are placeholders or configured
 export const isFirebaseConfigured = () => {
   const key = typeof firebaseConfig.apiKey === 'string' ? firebaseConfig.apiKey.trim() : '';
   return Boolean(key && !key.includes('YOUR_FIREBASE'));
@@ -258,19 +230,18 @@ export const isFirebaseConfigured = () => {
 let app = null, auth = null, db = null;
 try {
   if (isFirebaseConfigured()) {
-    app = initializeApp(firebaseConfig);
+    app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
   }
 } catch (err) {
-  console.info('Firebase initialization running in offline/standalone mode:', err.message);
+  console.info('Firebase initialization status:', err.message);
 }
 
 export { app, auth, db };
 
 // --------------------------------------------------------------------------
-// 2. AUTHORITATIVE PRODUCT CATALOG (IMMUTABLE SERVER-SIDE PRICING)
-// Prevents client-side price tampering or Inspect-Element modifications.
+// 2. AUTHORITATIVE PRODUCT CATALOG & SELLER PERMISSIONS
 // --------------------------------------------------------------------------
 export const OFFICIAL_PRICING_MAP = PRODUCTS.reduce((acc, p) => {
   acc[p.code] = {
@@ -284,12 +255,8 @@ export const OFFICIAL_PRICING_MAP = PRODUCTS.reduce((acc, p) => {
   return acc;
 }, {});
 
-// Designated Seller Email (Has administrative verification powers)
 export const SELLER_ADMIN_EMAIL = 'admin@kissa.in';
 
-/**
- * Standardized case-insensitive seller email check.
- */
 export const isSellerEmail = (email) => {
   return Boolean(
     email &&
@@ -298,10 +265,6 @@ export const isSellerEmail = (email) => {
   );
 };
 
-/**
- * Determines whether a user object has verified seller/administrator privileges.
- * In offline mode (!isFirebaseConfigured()), unverified sessions cannot claim seller role.
- */
 export const isSellerUser = (user) => {
   if (!user) return false;
   const isTargetEmail = isSellerEmail(user.email);
@@ -318,53 +281,15 @@ export const isSellerUser = (user) => {
 // --------------------------------------------------------------------------
 // 3. AUTHENTICATION SERVICES
 // --------------------------------------------------------------------------
-
-/**
- * Local accounts helper for offline/standalone mode
- */
-function getLocalUsers() {
-  try {
-    return JSON.parse(localStorage.getItem('kissa_users_db') || '[]');
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveLocalUser(userData) {
-  const users = getLocalUsers();
-  const existingIdx = users.findIndex(u => u.email && u.email.toLowerCase() === userData.email.toLowerCase());
-  if (existingIdx !== -1) {
-    users[existingIdx] = { ...users[existingIdx], ...userData };
-  } else {
-    users.push(userData);
-  }
-  localStorage.setItem('kissa_users_db', JSON.stringify(users));
-}
-
-/**
- * Sign in using Google OAuth Popup
- */
 export async function loginWithGoogle() {
-  if (!isFirebaseConfigured()) {
-    // Standard customer profile for standalone/offline mode (cannot impersonate admin)
-    const cleanEmail = 'customer@gmail.com';
-    const user = {
-      uid: 'usr_g_' + Math.random().toString(36).substring(2, 10),
-      displayName: 'Customer',
-      email: cleanEmail,
-      photoURL: null,
-      role: 'customer'
-    };
-    saveLocalUser(user);
-    localStorage.setItem('kissa_user', JSON.stringify(user));
-    return user;
+  if (!isFirebaseConfigured() || !auth) {
+    throw new Error('Firebase Authentication is not configured. Please set valid Firebase credentials.');
   }
 
   const provider = new GoogleAuthProvider();
   const result = await signInWithPopup(auth, provider);
   const user = result.user;
   
-  // Sync profile into Firestore 'users' collection
   const userDocRef = doc(db, 'users', user.uid);
   const userDoc = await getDoc(userDocRef);
   const isSeller = isSellerEmail(user.email);
@@ -382,74 +307,36 @@ export async function loginWithGoogle() {
   }
 
   await setDoc(userDocRef, profileData, { merge: true });
-  return { ...user, role: profileData.role };
+  const fullUser = { ...user, role: profileData.role };
+  try {
+    localStorage.setItem('kissa_user', JSON.stringify({
+      uid: user.uid,
+      displayName: profileData.displayName,
+      email: user.email,
+      role: profileData.role
+    }));
+  } catch (_) {}
+  return fullUser;
 }
 
-/**
- * Sign in with Email & Password
- */
 export async function loginWithEmail(email, password) {
   const cleanEmail = String(email || '').trim().toLowerCase();
   
-  if (!isFirebaseConfigured()) {
-    const isTargetSeller = isSellerEmail(cleanEmail);
-
-    if (isTargetSeller) {
-      // Secure local check: prevent impersonation of admin@kissa.in in offline mode
-      if (!isLocalEnv) {
-        throw new Error('Offline administrator access is disabled in production environments.');
-      }
-      if (!localOfflineAdminKey) {
-        throw new Error('Offline administrator access requires offlineAdminKey configured in firebase-credentials.js.');
-      }
-      if (!password || password !== localOfflineAdminKey) {
-        throw new Error('Offline administrator access requires valid local passkey verification.');
-      }
+  if (!isFirebaseConfigured() || !auth) {
+    if (isSellerEmail(cleanEmail) && isLocalEnv && localOfflineAdminKey && password === localOfflineAdminKey) {
       try {
         sessionStorage.setItem('kissa_offline_admin_verified', 'true');
       } catch (_) {}
+      const sessionUser = {
+        uid: 'usr_local_admin',
+        displayName: 'Kissa Admin (Local Verified)',
+        email: cleanEmail,
+        role: 'seller'
+      };
+      localStorage.setItem('kissa_user', JSON.stringify(sessionUser));
+      return sessionUser;
     }
-
-    const existingUsers = getLocalUsers();
-    let matched = existingUsers.find(u => u.email && u.email.toLowerCase() === cleanEmail);
-
-    if (!matched) {
-      if (isTargetSeller) {
-        // Only register verified seller after passkey verification
-        matched = {
-          uid: 'usr_local_admin',
-          displayName: 'Kissa Admin (Offline Verified)',
-          email: cleanEmail,
-          role: 'seller',
-          createdAt: new Date().toISOString()
-        };
-        saveLocalUser(matched);
-      } else {
-        // Auto-register initial customer user
-        matched = {
-          uid: 'usr_' + Math.random().toString(36).substring(2, 10),
-          displayName: cleanEmail.split('@')[0],
-          email: cleanEmail,
-          role: 'customer',
-          createdAt: new Date().toISOString()
-        };
-        saveLocalUser(matched);
-      }
-    } else if (isTargetSeller) {
-      matched.role = 'seller';
-      saveLocalUser(matched);
-    }
-
-    const sessionUser = {
-      uid: matched.uid,
-      displayName: matched.displayName,
-      email: matched.email,
-      phone: matched.phone || '',
-      role: isTargetSeller ? 'seller' : (matched.role || 'customer')
-    };
-
-    localStorage.setItem('kissa_user', JSON.stringify(sessionUser));
-    return sessionUser;
+    throw new Error('Firebase Authentication is not configured. Live credentials required.');
   }
 
   const userCred = await signInWithEmailAndPassword(auth, cleanEmail, password);
@@ -458,45 +345,27 @@ export async function loginWithEmail(email, password) {
   const role = userDoc.exists()
     ? (userDoc.data().role || 'customer')
     : (isSellerEmail(user.email) ? 'seller' : 'customer');
-  return { ...user, role };
+
+  const fullUser = { ...user, role };
+  try {
+    localStorage.setItem('kissa_user', JSON.stringify({
+      uid: user.uid,
+      displayName: user.displayName || 'Customer',
+      email: user.email,
+      role
+    }));
+  } catch (_) {}
+  return fullUser;
 }
 
-/**
- * Register with Email, Password, Name & Phone
- */
 export async function registerWithEmail(name, email, password, phone, role = 'customer') {
   const cleanEmail = String(email || '').trim().toLowerCase();
   const cleanName = String(name || 'Customer').trim();
   const cleanPhone = String(phone || '').trim();
   const targetIsSeller = isSellerEmail(cleanEmail) || role === 'seller';
 
-  if (!isFirebaseConfigured()) {
-    if (targetIsSeller) {
-      if (!isLocalEnv) {
-        throw new Error('Offline administrator registration is disabled in production environments.');
-      }
-      if (!localOfflineAdminKey) {
-        throw new Error('Offline administrator access requires offlineAdminKey configured in firebase-credentials.js.');
-      }
-      if (!password || password !== localOfflineAdminKey) {
-        throw new Error('Offline administrator registration requires valid local passkey verification.');
-      }
-      try {
-        sessionStorage.setItem('kissa_offline_admin_verified', 'true');
-      } catch (_) {}
-    }
-
-    const newUser = {
-      uid: 'usr_' + Date.now().toString(36),
-      displayName: cleanName,
-      email: cleanEmail,
-      phone: cleanPhone,
-      role: targetIsSeller ? 'seller' : 'customer',
-      createdAt: new Date().toISOString()
-    };
-    saveLocalUser(newUser);
-    localStorage.setItem('kissa_user', JSON.stringify(newUser));
-    return newUser;
+  if (!isFirebaseConfigured() || !auth) {
+    throw new Error('Firebase Authentication is not configured. Live credentials required for registration.');
   }
 
   const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
@@ -514,15 +383,22 @@ export async function registerWithEmail(name, email, password, phone, role = 'cu
   };
 
   await setDoc(doc(db, 'users', user.uid), profileData);
-  return { ...user, ...profileData };
+  const fullUser = { ...user, ...profileData };
+  try {
+    localStorage.setItem('kissa_user', JSON.stringify({
+      uid: user.uid,
+      displayName: cleanName,
+      email: cleanEmail,
+      phone: cleanPhone,
+      role: profileData.role
+    }));
+  } catch (_) {}
+  return fullUser;
 }
 
-/**
- * Sign Out
- */
 export async function logoutUser() {
-  localStorage.removeItem('kissa_user');
   try {
+    localStorage.removeItem('kissa_user');
     sessionStorage.removeItem('kissa_offline_admin_verified');
   } catch (_) {}
   if (isFirebaseConfigured() && auth) {
@@ -530,28 +406,23 @@ export async function logoutUser() {
   }
 }
 
-/**
- * Listen for Auth State Changes
- */
 export function subscribeToAuthState(callback) {
-  if (!isFirebaseConfigured()) {
+  if (!isFirebaseConfigured() || !auth) {
     let user = null;
     try {
       const stored = localStorage.getItem('kissa_user');
       user = stored ? JSON.parse(stored) : null;
     } catch (_) {}
 
-    // In offline mode, if stored user claims to be seller, verify passkey session flag and isLocalEnv
     if (user && (user.role === 'seller' || isSellerEmail(user.email))) {
       let isVerified = false;
       try {
         isVerified = isLocalEnv && sessionStorage.getItem('kissa_offline_admin_verified') === 'true';
       } catch (_) {}
       if (!isVerified) {
-        user.role = 'customer';
+        user = null;
       }
     }
-
     callback(user);
     return () => {};
   }
@@ -571,28 +442,84 @@ export function subscribeToAuthState(callback) {
           phone: phone,
           role: role
         };
-        localStorage.setItem('kissa_user', JSON.stringify(fullUser));
+        try {
+          localStorage.setItem('kissa_user', JSON.stringify(fullUser));
+        } catch (_) {}
         callback(fullUser);
       } catch (err) {
         callback(firebaseUser);
       }
     } else {
-      localStorage.removeItem('kissa_user');
+      try {
+        localStorage.removeItem('kissa_user');
+      } catch (_) {}
       callback(null);
     }
   });
 }
 
 // --------------------------------------------------------------------------
-// 4. ZERO-TRUST ORDER CREATION (ANTI-PRICE-TAMPERING)
+// 4. REAL-TIME AVAILABILITY QUERY
 // --------------------------------------------------------------------------
+export async function fetchLiveAvailability() {
+  // First attempt serverless endpoint
+  try {
+    const res = await fetch('/api/orders/availability');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success') {
+        return {
+          bookedDatesByDress: data.bookedDatesByDress || {},
+          soldDresses: data.soldDresses || []
+        };
+      }
+    }
+  } catch (_) {}
 
-/**
- * Creates an order with strict server-side price recalculation.
- * Even if an attacker modified the client JavaScript price variables,
- * the order is validated against OFFICIAL_PRICING_MAP.
- */
-export async function createOrderInFirestore(orderInput, currentUser) {
+  // Direct Firestore fallback
+  if (db && isFirebaseConfigured()) {
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      const bookedDatesByDress = {};
+      const soldDresses = [];
+      const nowMs = Date.now();
+
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        const code = String(data.code || docSnap.id).toUpperCase();
+        if (data.sold === true) soldDresses.push(code);
+
+        const validDates = new Set();
+        for (const b of (data.activeBookings || [])) {
+          if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || (b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired')) {
+            if (b.startDate && b.endDate) {
+              const curr = new Date(b.startDate + 'T00:00:00Z');
+              const end = new Date(b.endDate + 'T00:00:00Z');
+              while (curr <= end) {
+                validDates.add(curr.toISOString().split('T')[0]);
+                curr.setUTCDate(curr.getUTCDate() + 1);
+              }
+            }
+          }
+        }
+        if (validDates.size > 0) {
+          bookedDatesByDress[code] = Array.from(validDates).sort();
+        }
+      });
+
+      return { bookedDatesByDress, soldDresses };
+    } catch (err) {
+      console.warn('Direct Firestore availability check warning:', err.message);
+    }
+  }
+
+  return { bookedDatesByDress: {}, soldDresses: [] };
+}
+
+// --------------------------------------------------------------------------
+// 5. SERVER-AUTHORITATIVE ORDER CREATION
+// --------------------------------------------------------------------------
+export async function createOrderInFirestore(orderInput, currentUser, idempotencyKey = null) {
   const dressCode = String(orderInput.dressCode || '').toUpperCase().trim();
   const catalogItem = OFFICIAL_PRICING_MAP[dressCode];
 
@@ -600,217 +527,321 @@ export async function createOrderInFirestore(orderInput, currentUser) {
     throw new Error('Invalid dress code: Product not found in catalog.');
   }
 
-  const orderType = orderInput.orderType === 'BUY' ? 'BUY' : 'RENT';
+  let resolvedUid = currentUser?.uid;
+  if (!resolvedUid && auth && isFirebaseConfigured()) {
+    if (auth.currentUser) {
+      resolvedUid = auth.currentUser.uid;
+    } else {
+      try {
+        const anon = await signInAnonymously(auth);
+        resolvedUid = anon.user.uid;
+      } catch (_) {
+        resolvedUid = 'guest_' + Date.now();
+      }
+    }
+  }
+  if (!resolvedUid) resolvedUid = 'guest_' + Date.now();
+
+  const idKey = idempotencyKey || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'idemp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8));
+
+  const payload = {
+    customerName: orderInput.customerName.trim(),
+    phone: String(orderInput.phone).replace(/\D/g, ''),
+    city: orderInput.city ? orderInput.city.trim() : 'Indore',
+    address: orderInput.address.trim(),
+    dressCode,
+    orderType: orderInput.orderType === 'BUY' ? 'BUY' : 'RENT',
+    startDate: orderInput.startDate || null,
+    endDate: orderInput.endDate || null,
+    customerUid: resolvedUid,
+    idempotencyKey: idKey
+  };
+
+  // Primary: Serverless Backend with Transaction & Price Calculation
+  try {
+    const apiRes = await fetch('/api/orders/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (data.success && data.order) {
+        return data.order;
+      }
+      throw new Error(data.error || 'Server order registration failed.');
+    } else {
+      const errData = await apiRes.json().catch(() => ({}));
+      if (errData.error) throw new Error(errData.error);
+    }
+  } catch (apiErr) {
+    // If it's a validation error or known server rejection, re-throw immediately
+    if (apiErr.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('NetworkError') && !apiErr.message.includes('Failed to fetch')) {
+      throw apiErr;
+    }
+  }
+
+  // Fallback: Direct Modular Firestore Atomic Transaction
+  if (!db || !isFirebaseConfigured()) {
+    throw new Error('Database connection is not configured. Please ensure Firebase is initialized.');
+  }
+
+  const orderType = payload.orderType;
   let rentalDays = 1;
   let rentOrBuyAmount = 0;
   let securityDeposit = 0;
 
   if (orderType === 'RENT') {
-    const sDate = new Date(orderInput.startDate + 'T00:00:00');
-    const eDate = new Date(orderInput.endDate + 'T00:00:00');
-
+    const sDate = new Date(payload.startDate + 'T00:00:00');
+    const eDate = new Date(payload.endDate + 'T00:00:00');
     if (isNaN(sDate.getTime()) || isNaN(eDate.getTime()) || eDate < sDate) {
       throw new Error('Invalid dates: Return date must be after pickup date.');
     }
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (sDate < today) {
-      throw new Error('Invalid dates: Cannot book dates in the past.');
-    }
+    if (sDate < today) throw new Error('Cannot book dates in the past.');
 
     rentalDays = Math.round((eDate - sDate) / (1000 * 60 * 60 * 24)) + 1;
-    if (rentalDays > 15) {
-      throw new Error('Maximum rental duration is 15 days.');
-    }
+    if (rentalDays > 15) throw new Error('Maximum rental duration is 15 days.');
 
-    // SERVER-AUTHORITATIVE PRICE COMPUTATION
     rentOrBuyAmount = catalogItem.rentPerDay * rentalDays;
     securityDeposit = catalogItem.securityDeposit;
   } else {
-    // Outright Purchase
     rentOrBuyAmount = catalogItem.buyPrice;
     securityDeposit = 0;
   }
 
   const totalPayable = rentOrBuyAmount + securityDeposit;
-  const orderId = 'ORD-' + Date.now().toString(36).toUpperCase();
+  const orderId = 'ORD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+  const nowMs = Date.now();
+  const expirationIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
 
-  let resolvedCustomerUid = currentUser ? currentUser.uid : null;
-  if (!resolvedCustomerUid && auth && isFirebaseConfigured()) {
-    if (auth.currentUser) {
-      resolvedCustomerUid = auth.currentUser.uid;
+  let finalOrderDoc = null;
+
+  await runTransaction(db, async (transaction) => {
+    const prodRef = doc(db, 'products', dressCode);
+    const prodSnap = await transaction.get(prodRef);
+
+    let prodData = prodSnap.exists()
+      ? prodSnap.data()
+      : { ...catalogItem, activeBookings: [], sold: false };
+
+    if (orderType === 'BUY') {
+      if (prodData.sold === true) throw new Error('Outfit already sold.');
+      prodData.sold = true;
     } else {
-      try {
-        const anonCred = await signInAnonymously(auth);
-        resolvedCustomerUid = anonCred.user.uid;
-      } catch (anonErr) {
-        resolvedCustomerUid = 'guest_' + Date.now();
+      const currentBookings = (prodData.activeBookings || []).filter(b => {
+        if (b.status === 'confirmed' || b.status === 'Verified & Dispatched') return true;
+        return b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired';
+      });
+
+      for (const b of currentBookings) {
+        if (!(payload.endDate < b.startDate || payload.startDate > b.endDate)) {
+          throw new Error(`Outfit is already booked between ${b.startDate} and ${b.endDate}.`);
+        }
       }
+
+      currentBookings.push({
+        orderId,
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        orderType: 'RENT',
+        status: 'pending',
+        expiresAt: expirationIso
+      });
+      prodData.activeBookings = currentBookings;
     }
-  }
-  if (!resolvedCustomerUid) {
-    resolvedCustomerUid = 'guest_' + Date.now();
-  }
 
-  const orderDocument = {
-    orderId: orderId,
-    customerUid: resolvedCustomerUid,
-    customerName: orderInput.customerName.trim(),
-    phone: String(orderInput.phone).replace(/\D/g, ''),
-    city: orderInput.city ? orderInput.city.trim() : 'Indore',
-    address: orderInput.address.trim(),
-    dressCode: dressCode,
-    dressTitle: catalogItem.title,
-    orderType: orderType,
-    startDate: orderType === 'RENT' ? orderInput.startDate : null,
-    endDate: orderType === 'RENT' ? orderInput.endDate : null,
-    rentalDays: rentalDays,
-    rentOrBuyAmount: rentOrBuyAmount,
-    securityDeposit: securityDeposit,
-    totalPayable: totalPayable,
-    status: 'Pending Payment', // Lifecycle: Pending Payment -> Payment Submitted -> Verified & Dispatched -> Delivered -> Returned
-    utrNumber: '',
-    paymentVerified: false,
-    dispatched: false,
-    createdAt: new Date().toISOString()
-  };
+    transaction.set(prodRef, { ...prodData, updatedAt: serverTimestamp() }, { merge: true });
 
-  if (!isFirebaseConfigured()) {
-    // Offline local storage fallback
-    const localOrders = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    localOrders.unshift(orderDocument);
-    localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
-    window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
-    return orderDocument;
-  }
+    finalOrderDoc = {
+      orderId,
+      idempotencyKey: idKey,
+      customerUid: resolvedUid,
+      customerName: payload.customerName,
+      phone: payload.phone,
+      city: payload.city,
+      address: payload.address,
+      dressCode,
+      dressTitle: catalogItem.title,
+      orderType,
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      rentalDays,
+      rentOrBuyAmount,
+      securityDeposit,
+      totalPayable,
+      status: 'pending_payment',
+      paymentStatus: 'unpaid',
+      utrNumber: '',
+      paymentVerified: false,
+      dispatched: false,
+      returned: false,
+      expiresAt: expirationIso,
+      createdAt: new Date().toISOString(),
+      timestamp: serverTimestamp()
+    };
 
-  // Write directly into Firestore 'orders' collection
-  const orderRef = doc(db, 'orders', orderId);
-  await setDoc(orderRef, {
-    ...orderDocument,
-    timestamp: serverTimestamp()
+    const orderRef = doc(db, 'orders', orderId);
+    transaction.set(orderRef, finalOrderDoc);
   });
 
-  return orderDocument;
+  return finalOrderDoc;
 }
 
 // --------------------------------------------------------------------------
-// 5. UTR (TRANSACTION ID) SUBMISSION
+// 6. 12-DIGIT UTR PAYMENT SUBMISSION
 // --------------------------------------------------------------------------
-
-/**
- * Customer submits their 12-digit UPI Transaction ID / UTR after paying via QR
- */
 export async function submitOrderUtr(orderId, rawUtr) {
   const cleanUtr = String(rawUtr || '').trim().replace(/\D/g, '');
-
   if (cleanUtr.length !== 12) {
     throw new Error('Please enter a valid 12-digit UPI Reference / UTR Number.');
   }
 
-  if (!isFirebaseConfigured()) {
-    const localOrders = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    const idx = localOrders.findIndex(o => o.orderId === orderId);
-    if (idx !== -1) {
-      localOrders[idx].utrNumber = cleanUtr;
-      localOrders[idx].status = 'Payment Submitted';
-      localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
-      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
-      return localOrders[idx];
+  // 1. Try serverless backend
+  try {
+    const apiRes = await fetch('/api/orders/submit-utr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId, utrNumber: cleanUtr })
+    });
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (data.success) {
+        return { orderId, utrNumber: cleanUtr, status: 'payment_submitted' };
+      }
     }
-    throw new Error('Order not found in local records.');
+  } catch (_) {}
+
+  // 2. Direct Firestore fallback
+  if (!db || !isFirebaseConfigured()) {
+    throw new Error('Database is currently unreachable. Could not submit UTR.');
   }
 
   const orderRef = doc(db, 'orders', orderId);
   await updateDoc(orderRef, {
     utrNumber: cleanUtr,
     status: 'Payment Submitted',
-    utrSubmittedAt: serverTimestamp()
+    paymentStatus: 'submitted',
+    utrSubmittedAt: new Date().toISOString(),
+    updatedAt: serverTimestamp()
   });
 
   return { orderId, utrNumber: cleanUtr, status: 'Payment Submitted' };
 }
 
 // --------------------------------------------------------------------------
-// 6. SELLER VERIFICATION & AUTOMATED WHATSAPP DISPATCH TRIGGER
+// 7. SELLER ACTIONS: VERIFY DISPATCH & RETURN RESTOCK
 // --------------------------------------------------------------------------
-
-/**
- * Seller verifies the customer's payment and dispatches the dress.
- * Automatically generates the WhatsApp confirmation link and updates Firestore.
- */
 export async function verifyAndDispatchOrder(order) {
   const orderId = order.orderId;
 
-  if (!isFirebaseConfigured()) {
-    const localOrders = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    const idx = localOrders.findIndex(o => o.orderId === orderId);
-    if (idx !== -1) {
-      localOrders[idx].status = 'Verified & Dispatched';
-      localOrders[idx].paymentVerified = true;
-      localOrders[idx].dispatched = true;
-      localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
-      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
-    }
-  } else {
-    const orderRef = doc(db, 'orders', orderId);
-    await updateDoc(orderRef, {
-      status: 'Verified & Dispatched',
-      paymentVerified: true,
-      dispatched: true,
-      verifiedAt: serverTimestamp(),
-      dispatchedAt: serverTimestamp()
+  // 1. Try serverless backend
+  try {
+    const res = await fetch('/api/admin/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verify_and_dispatch', orderId })
     });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.whatsappUrl) {
+        window.open(data.whatsappUrl, '_blank');
+        return { success: true, whatsappUrl: data.whatsappUrl };
+      }
+    }
+  } catch (_) {}
+
+  // 2. Direct Firestore Transaction Fallback
+  if (!db || !isFirebaseConfigured()) {
+    throw new Error('Firestore connection is required for seller verification.');
   }
 
-  // Generate automated pre-filled WhatsApp Dispatch Message
+  await runTransaction(db, async (transaction) => {
+    const prodRef = doc(db, 'products', order.dressCode);
+    const prodSnap = await transaction.get(prodRef);
+    if (prodSnap.exists()) {
+      const bookings = (prodSnap.data().activeBookings || []).map(b => {
+        if (b.orderId === orderId) return { ...b, status: 'confirmed' };
+        return b;
+      });
+      transaction.set(prodRef, { activeBookings: bookings, updatedAt: serverTimestamp() }, { merge: true });
+    }
+
+    const orderRef = doc(db, 'orders', orderId);
+    transaction.update(orderRef, {
+      status: 'Verified & Dispatched',
+      paymentStatus: 'verified',
+      paymentVerified: true,
+      dispatched: true,
+      verifiedAt: new Date().toISOString(),
+      dispatchedAt: new Date().toISOString(),
+      updatedAt: serverTimestamp()
+    });
+  });
+
   const phone = order.phone.length === 10 ? '91' + order.phone : order.phone;
   const messageText = 
     `Namaste ${order.customerName} ji! 🌸\n\n` +
-    `✅ Your payment of ₹${order.totalPayable.toLocaleString('en-IN')}${order.utrNumber ? ' (UTR: ' + order.utrNumber + ')' : ''} for Order *${order.orderId}* has been *VERIFIED*.\n\n` +
+    `✅ Your payment of ₹${Number(order.totalPayable || 0).toLocaleString('en-IN')}${order.utrNumber ? ' (UTR: ' + order.utrNumber + ')' : ''} for Order *${order.orderId}* has been *VERIFIED*.\n\n` +
     `🚚 Your festive outfit (*${order.dressCode} — ${order.dressTitle}*) has been packed and *DISPATCHED* for doorstep delivery in ${order.city || 'Indore'}!\n\n` +
     `📦 Address: ${order.address}\n\n` +
     `Thank you for choosing Kissa Garbha Rentals! ✨`;
 
   const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(messageText)}`;
-  
-  // Open WhatsApp in a new tab for 1-click send
   window.open(whatsappUrl, '_blank');
-
   return { success: true, whatsappUrl };
 }
 
-/**
- * Mark a dress as returned and restocked in inventory
- */
 export async function returnAndRestockOrder(order) {
   const orderId = order.orderId;
 
-  if (!isFirebaseConfigured()) {
-    const localOrders = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    const idx = localOrders.findIndex(o => o.orderId === orderId);
-    if (idx !== -1) {
-      localOrders[idx].status = 'Returned';
-      localOrders[idx].returned = true;
-      localStorage.setItem('kissa_orders', JSON.stringify(localOrders));
-      window.dispatchEvent(new CustomEvent('kissa_orders_updated', { detail: localOrders }));
-    }
-  } else {
-    const orderRef = doc(db, 'orders', orderId);
-    await updateDoc(orderRef, {
-      status: 'Returned',
-      returned: true,
-      returnedAt: serverTimestamp()
+  // 1. Try serverless backend
+  try {
+    const res = await fetch('/api/admin/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'return_and_restock', orderId })
     });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.whatsappUrl) {
+        window.open(data.whatsappUrl, '_blank');
+        return { success: true, whatsappUrl: data.whatsappUrl };
+      }
+    }
+  } catch (_) {}
+
+  // 2. Direct Firestore Transaction Fallback
+  if (!db || !isFirebaseConfigured()) {
+    throw new Error('Firestore connection is required for returning and restocking.');
   }
 
-  // Pre-fill security deposit refund WhatsApp notification
+  await runTransaction(db, async (transaction) => {
+    const prodRef = doc(db, 'products', order.dressCode);
+    const prodSnap = await transaction.get(prodRef);
+    if (prodSnap.exists()) {
+      const remainingBookings = (prodSnap.data().activeBookings || []).filter(b => b.orderId !== orderId);
+      const updates = { activeBookings: remainingBookings, updatedAt: serverTimestamp() };
+      if (order.orderType === 'BUY') updates.sold = false;
+      transaction.set(prodRef, updates, { merge: true });
+    }
+
+    const orderRef = doc(db, 'orders', orderId);
+    transaction.update(orderRef, {
+      status: 'Returned',
+      returned: true,
+      returnedAt: new Date().toISOString(),
+      updatedAt: serverTimestamp()
+    });
+  });
+
   const phone = order.phone.length === 10 ? '91' + order.phone : order.phone;
   const messageText = 
     `Namaste ${order.customerName} ji! 🌸\n\n` +
     `🔄 We have received the outfit (*${order.dressCode}*) back safely.\n\n` +
-    `💰 Your security deposit of *₹${order.securityDeposit.toLocaleString('en-IN')}* has been initiated for refund to your UPI ID.\n\n` +
+    `💰 Your security deposit of *₹${Number(order.securityDeposit || 0).toLocaleString('en-IN')}* has been initiated for refund to your UPI ID.\n\n` +
     `Hope you had an amazing festive celebration with Kissa! ✨`;
 
   const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(messageText)}`;
@@ -819,54 +850,27 @@ export async function returnAndRestockOrder(order) {
 }
 
 // --------------------------------------------------------------------------
-// 7. REAL-TIME ORDERS LISTENER (FOR SELLER DASHBOARD & CUSTOMER ORDERS)
+// 8. REAL-TIME ORDERS LISTENERS
 // --------------------------------------------------------------------------
-
-/**
- * Listen to all orders for the Seller Dashboard
- */
 export function subscribeToAllOrders(callback) {
-  if (!isFirebaseConfigured()) {
-    const getLocal = () => {
-      const stored = localStorage.getItem('kissa_orders');
-      if (!stored) {
-        return [];
-      }
-      try {
-        return JSON.parse(stored);
-      } catch (err) {
-        return [];
-      }
-    };
-
-    const notify = () => callback(getLocal());
-    notify();
-
-    window.addEventListener('kissa_orders_updated', notify);
-
-    return () => {
-      window.removeEventListener('kissa_orders_updated', notify);
-    };
+  if (!isFirebaseConfigured() || !db) {
+    callback([]);
+    return () => {};
   }
 
-  const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(50));
+  const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(100));
   return onSnapshot(q, (snapshot) => {
     const orders = [];
-    snapshot.forEach(doc => orders.push(doc.data()));
+    snapshot.forEach(docSnap => orders.push(docSnap.data()));
     callback(orders);
   }, (err) => {
-    console.error('Firestore orders listener error:', err);
+    console.error('Firestore orders stream error:', err);
   });
 }
 
-/**
- * Listen to orders for a specific customer
- */
 export function subscribeToCustomerOrders(customerUid, callback) {
-  if (!isFirebaseConfigured() || !customerUid) {
-    const all = JSON.parse(localStorage.getItem('kissa_orders') || '[]');
-    const filtered = all.filter(o => o.customerUid === customerUid);
-    callback(filtered);
+  if (!isFirebaseConfigured() || !db || !customerUid) {
+    callback([]);
     return () => {};
   }
 
@@ -878,7 +882,9 @@ export function subscribeToCustomerOrders(customerUid, callback) {
 
   return onSnapshot(q, (snapshot) => {
     const orders = [];
-    snapshot.forEach(doc => orders.push(doc.data()));
+    snapshot.forEach(docSnap => orders.push(docSnap.data()));
     callback(orders);
+  }, (err) => {
+    console.warn('Customer orders stream error:', err.message);
   });
 }

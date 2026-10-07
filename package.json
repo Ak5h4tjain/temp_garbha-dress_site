@@ -2,5 +2,8 @@
   "name": "kissa-festive-rentals",
   "version": "1.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "firebase": "^12.19.0"
+  }
 }

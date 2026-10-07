@@ -56,23 +56,14 @@ service cloud.firestore {
     }
 
     // ========================================================================
-    // 2. PRODUCTS COLLECTION (Catalog & Authoritative Pricing)
+    // 2. PRODUCTS COLLECTION (Catalog & Authoritative Inventory/Pricing)
     // ========================================================================
     match /products/{dressCode} {
-      function isValidProductData(data) {
-        return data.keys().hasAll(['code', 'title', 'rentPerDay', 'securityDeposit', 'buyPrice']) &&
-          isValidString(data.code, 3, 30) &&
-          isValidString(data.title, 2, 150) &&
-          data.rentPerDay is number && data.rentPerDay > 0 &&
-          data.securityDeposit is number && data.securityDeposit >= 0 &&
-          data.buyPrice is number && data.buyPrice > 0;
-      }
-
-      // Public read access for customers to browse outfits & prices
+      // Public read access for customers to browse outfits, prices, and availability
       allow read: if true;
 
-      // Only authenticated Sellers can create, update or delete products
-      allow create, update: if isSeller() && isValidProductData(request.resource.data);
+      // Only authenticated Sellers can create, update, or delete products directly
+      allow create, update: if isSeller();
       allow delete: if isSeller();
     }
 
@@ -92,22 +83,27 @@ service cloud.firestore {
         isValidString(data.dressCode, 3, 30) &&
         (data.orderType == 'RENT' || data.orderType == 'BUY') &&
         data.totalPayable is number && data.totalPayable > 0 &&
-        data.status == 'Pending Payment';
+        (data.status == 'Pending Payment' || data.status == 'pending_payment') &&
+        data.paymentVerified == false &&
+        data.dispatched == false;
       }
 
       // Customer can read their own orders; Seller can read all orders
       allow read: if isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
 
-      // Customer can place order with initial status 'Pending Payment' (Both authenticated & guests supported)
-      allow create: if isValidNewOrder(request.resource.data) &&
-        (isSignedIn() ? request.resource.data.customerUid == request.auth.uid : request.resource.data.customerUid.matches('guest_.*'));
+      // Order creation: Sellers can create any order; authenticated or guest users can create pending order
+      allow create: if isSeller() || (
+        isValidNewOrder(request.resource.data) &&
+        (isSignedIn() ? request.resource.data.customerUid == request.auth.uid : request.resource.data.customerUid.matches('guest_.*'))
+      );
 
-      // Customer can ONLY update utrNumber and set status to 'Payment Submitted'
+      // Customer can ONLY update utrNumber and set status to 'payment_submitted' / 'Payment Submitted'
       // Customer is STRICTLY FORBIDDEN from altering totalPayable, dressCode, or rental dates!
       allow update: if 
-        // Case A: Customer submitting UTR Transaction ID (Authenticated or Guest)
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['utrNumber', 'status', 'utrSubmittedAt']) &&
-         request.resource.data.status == 'Payment Submitted' &&
+        // Case A: Customer submitting 12-digit UTR Transaction ID
+        (resource.data.status in ['Pending Payment', 'pending_payment'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['utrNumber', 'status', 'paymentStatus', 'utrSubmittedAt', 'updatedAt']) &&
+         request.resource.data.status in ['Payment Submitted', 'payment_submitted'] &&
          isValidString(request.resource.data.utrNumber, 10, 20))
         ||
         // Case B: Seller verifying payment, dispatching, or restocking

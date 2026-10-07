@@ -25,16 +25,14 @@ import {
   logoutUser,
   subscribeToAuthState,
   createOrderInFirestore,
-  submitOrderUtr
+  submitOrderUtr,
+  fetchLiveAvailability
 } from './firebase-config.js';
 
 // --------------------------------------------------------------------------
 // CONFIGURATION
 // --------------------------------------------------------------------------
 export const CONFIG = {
-  // Published Google Apps Script Web App exec URL
-  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyyaAlw00M3Medz47m5j65IytEQoSdQJp5J8BprSXpPuGknUORr7nMC67D1nsyKZSyIZQ/exec',
-
   // Admin WhatsApp business number for customer contact & fallback
   WHATSAPP_PHONE: '918839395472',
 
@@ -696,23 +694,16 @@ function closeBookingModal() {
 }
 
 // --------------------------------------------------------------------------
-// INVENTORY AVAILABILITY (LIVE APPS SCRIPT)
+// INVENTORY AVAILABILITY (LIVE FIRESTORE & SERVER-AUTHORITATIVE API)
 // --------------------------------------------------------------------------
 async function prefetchInventoryAvailability() {
-  if (!CONFIG.APPS_SCRIPT_URL || CONFIG.APPS_SCRIPT_URL.includes('YOUR_APPS_SCRIPT')) {
-    return;
-  }
-
   try {
-    const res = await fetch(CONFIG.APPS_SCRIPT_URL);
-    const data = await res.json();
-    if (data.status === 'success') {
-      state.bookedDatesCache = data.bookedDatesByDress || {};
-      state.soldDresses = data.soldDresses || [];
-      renderProductGrid();
-    }
+    const { bookedDatesByDress, soldDresses } = await fetchLiveAvailability();
+    state.bookedDatesCache = bookedDatesByDress || {};
+    state.soldDresses = soldDresses || [];
+    renderProductGrid();
   } catch (err) {
-    console.warn('Apps Script inventory query failed, running in local mode:', err);
+    console.warn('Live inventory availability query warning:', err);
   }
 }
 
@@ -877,19 +868,7 @@ async function handleAutomatedOrderSubmit(e) {
 
     const upiLink = `upi://pay?pa=${CONFIG.ADMIN_UPI_ID}&pn=Kissa+Garbha&am=${orderDoc.totalPayable}&cu=INR&tn=Order+${orderDoc.orderId}`;
 
-    // 2. Also forward to Apps Script in background if available
-    if (CONFIG.APPS_SCRIPT_URL && !CONFIG.APPS_SCRIPT_URL.includes('YOUR_APPS_SCRIPT')) {
-      fetch(CONFIG.APPS_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'create_order',
-          ...orderDoc
-        })
-      }).catch(err => console.warn('Background Apps Script sync:', err));
-    }
-
-    // 3. Switch modal to Step 1 & Step 2 (QR Code & 12-Digit UTR Box)
+    // 2. Switch modal to Step 1 & Step 2 (QR Code & 12-Digit UTR Box)
     showOrderSuccessView({
       orderId: orderDoc.orderId,
       customerName: orderDoc.customerName,
