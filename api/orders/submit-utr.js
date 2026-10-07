@@ -2,12 +2,13 @@
  * ==========================================================================
  * SECURE 12-DIGIT UTR PAYMENT SUBMISSION (/api/orders/submit-utr)
  * ==========================================================================
- * Validates UTR reference format, ensures order ownership & valid status,
- * transitions lifecycle to 'payment_submitted', and dispatches Telegram notification.
+ * Validates UTR reference format, ensures authenticated order ownership,
+ * transitions lifecycle to 'payment_submitted', atomically marks activeBooking
+ * as non-expiring holding status in product document, and dispatches Telegram alert.
  */
 
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { getDb } from '../_firebase.js';
+import { getDb, FieldValue, verifyAuthToken } from '../_firebase.js';
+import { getProductDocId } from '../_catalog.js';
 import { sendTelegramNotification } from '../_telegram.js';
 
 export default async function handler(req, res) {
@@ -39,16 +40,30 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Invalid UTR: Bank Reference / UTR Number must be exactly 12 numeric digits.' });
     }
 
-    const orderRef = doc(db, 'orders', orderId);
-    const orderSnap = await getDoc(orderRef);
+    // 1. Verify caller identity if token provided
+    const decodedToken = await verifyAuthToken(req);
 
-    if (!orderSnap.exists()) {
+    const orderRef = db.collection('orders').doc(orderId);
+    const orderSnap = await orderRef.get();
+
+    if (!orderSnap.exists) {
       return res.status(404).json({ success: false, error: `Order ${orderId} not found in database.` });
     }
 
     const order = orderSnap.data();
 
-    // Check order status constraints
+    // 2. Ownership verification: authenticated orders require matching UID or seller
+    if (order.customerUid && !order.customerUid.startsWith('guest_')) {
+      if (!decodedToken) {
+        return res.status(401).json({ success: false, error: 'Authentication required to submit payment for this account.' });
+      }
+      const isSeller = decodedToken.email === 'admin@kissa.in' || decodedToken.role === 'seller';
+      if (decodedToken.uid !== order.customerUid && !isSeller) {
+        return res.status(403).json({ success: false, error: 'Unauthorized: You can only submit payment for your own order.' });
+      }
+    }
+
+    // 3. Status and expiration validation
     const currentStatus = String(order.status || '').toLowerCase();
     if (currentStatus === 'cancelled' || currentStatus === 'expired') {
       return res.status(400).json({ success: false, error: `Cannot submit payment: Order is ${order.status}.` });
@@ -57,8 +72,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Payment for this order has already been verified.' });
     }
 
-    // Check expiration
-    if (order.expiresAt && currentStatus === 'pending_payment') {
+    if (order.expiresAt && (currentStatus === 'pending_payment' || currentStatus === 'pending payment')) {
       const nowMs = Date.now();
       const expMs = new Date(order.expiresAt).getTime();
       if (nowMs > expMs) {
@@ -66,26 +80,70 @@ export default async function handler(req, res) {
       }
     }
 
-    // Update order with UTR reference & lifecycle transition
     const utrTimestamp = new Date().toISOString();
-    await updateDoc(orderRef, {
-      utrNumber: cleanUtr,
-      status: 'payment_submitted',
-      paymentStatus: 'submitted',
-      utrSubmittedAt: utrTimestamp,
-      updatedAt: serverTimestamp()
+
+    // 4. ATOMIC TRANSACTION: update both order AND product's activeBookings holding status
+    await db.runTransaction(async (transaction) => {
+      const oSnap = await transaction.get(orderRef);
+      if (!oSnap.exists) throw new Error(`Order ${orderId} not found.`);
+
+      // Update product's activeBookings to non-expiring 'payment_submitted' holding status
+      if (order.dressCode) {
+        const prodDocId = getProductDocId(order.dressCode);
+        const prodRef = db.collection('products').doc(prodDocId);
+        const prodSnap = await transaction.get(prodRef);
+
+        if (prodSnap.exists) {
+          const prodData = prodSnap.data();
+          const updatedBookings = (prodData.activeBookings || []).map(b => {
+            if (b.orderId === orderId) {
+              return {
+                ...b,
+                status: 'payment_submitted',
+                utrNumber: cleanUtr
+              };
+            }
+            return b;
+          });
+
+          transaction.set(prodRef, {
+            activeBookings: updatedBookings,
+            updatedAt: FieldValue.serverTimestamp()
+          }, { merge: true });
+        }
+      }
+
+      // Update order document
+      transaction.update(orderRef, {
+        utrNumber: cleanUtr,
+        status: 'payment_submitted',
+        paymentStatus: 'submitted',
+        utrSubmittedAt: utrTimestamp,
+        updatedAt: FieldValue.serverTimestamp()
+      });
     });
 
-    // Send Telegram alert to Store Owner
-    sendTelegramNotification(
-      `💰 *UTR PAYMENT SUBMITTED FOR VERIFICATION*\n\n` +
-      `📋 *Order ID*: \`${orderId}\`\n` +
-      `🔢 *UTR Number*: \`${cleanUtr}\`\n` +
-      `💵 *Amount Due*: ₹${Number(order.totalPayable || 0).toLocaleString('en-IN')}\n` +
-      `👤 *Customer*: ${order.customerName} (\`${order.phone}\`)\n` +
-      `👗 *Outfit*: ${order.dressTitle} (\`${order.dressCode}\`)\n` +
-      `⚡ *Action*: Open Seller Admin Center to verify & dispatch.`
-    ).catch(() => {});
+    // 5. Telegram alert to Store Owner
+    const notifText =
+      `💰 UTR PAYMENT SUBMITTED FOR VERIFICATION\n\n` +
+      `Order ID: ${orderId}\n` +
+      `UTR Number: ${cleanUtr}\n` +
+      `Amount Due: ₹${Number(order.totalPayable || 0).toLocaleString('en-IN')}\n` +
+      `Customer: ${order.customerName} (${order.phone})\n` +
+      `Outfit: ${order.dressTitle} (${order.dressCode})\n` +
+      `Action: Open Seller Admin Center to verify & dispatch.`;
+
+    const telegramPromise = sendTelegramNotification(notifText);
+    try {
+      if (typeof req.waitUntil === 'function') {
+        req.waitUntil(telegramPromise);
+      } else {
+        await Promise.race([
+          telegramPromise,
+          new Promise(resolve => setTimeout(resolve, 800))
+        ]);
+      }
+    } catch (_) {}
 
     return res.status(200).json({
       success: true,

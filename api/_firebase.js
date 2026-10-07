@@ -1,38 +1,83 @@
 /**
  * ==========================================================================
- * SERVER-SIDE FIREBASE INITIALIZER (api/_firebase.js)
+ * SERVER-SIDE FIREBASE ADMIN INITIALIZER (api/_firebase.js)
  * ==========================================================================
- * Provides a single Firestore database connection for Vercel Serverless Functions.
- * Securely reads from environment variables, with local fallback to git-ignored credentials.
+ * Provides privileged Firestore database connection and Auth verification
+ * for Vercel Serverless Functions using firebase-admin.
  */
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import admin from 'firebase-admin';
 
-let localCreds = null;
-try {
-  const credModule = await import('../firebase-credentials.js');
-  localCreds = credModule?.firebaseCredentials || null;
-} catch (_) {}
+let adminApp = null;
 
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || localCreds?.apiKey || "",
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || localCreds?.authDomain || "kissa-database.firebaseapp.com",
-  projectId: process.env.FIREBASE_PROJECT_ID || localCreds?.projectId || "kissa-database",
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || localCreds?.storageBucket || "kissa-database.firebasestorage.app",
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || localCreds?.messagingSenderId || "1098932701632",
-  appId: process.env.FIREBASE_APP_ID || localCreds?.appId || "1:1098932701632:web:8848e52891835990116025"
-};
+export function getAdminApp() {
+  if (admin.apps.length > 0) {
+    return admin.apps[0];
+  }
 
-let dbInstance = null;
+  let credential = null;
+  const projectId = process.env.FIREBASE_PROJECT_ID || 'kissa-database';
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      const sa = typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'string'
+        ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+        : process.env.FIREBASE_SERVICE_ACCOUNT;
+      credential = admin.credential.cert(sa);
+    } catch (e) {
+      console.warn('[Firebase Admin] Failed to parse FIREBASE_SERVICE_ACCOUNT:', e.message);
+    }
+  } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    try {
+      credential = admin.credential.cert({
+        projectId,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      });
+    } catch (e) {
+      console.warn('[Firebase Admin] Failed to initialize cert from private key:', e.message);
+    }
+  }
+
+  const options = { projectId };
+  if (credential) {
+    options.credential = credential;
+  }
+
+  adminApp = admin.initializeApp(options);
+  return adminApp;
+}
 
 export function getDb() {
-  if (!dbInstance) {
-    if (!firebaseConfig.apiKey) {
-      throw new Error('Firebase configuration is missing. Please set FIREBASE_API_KEY in environment variables or configure firebase-credentials.js.');
+  getAdminApp();
+  return admin.firestore();
+}
+
+export function getAdminAuth() {
+  getAdminApp();
+  return admin.auth();
+}
+
+export const FieldValue = admin.firestore.FieldValue;
+
+/**
+ * Extracts and verifies the Firebase ID token from the Authorization header.
+ * Returns decoded token or null if unauthenticated / invalid.
+ */
+export async function verifyAuthToken(req) {
+  try {
+    const authHeader = req.headers?.authorization || req.headers?.Authorization;
+    if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+      return null;
     }
-    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    dbInstance = getFirestore(app);
+    const idToken = authHeader.substring(7).trim();
+    if (!idToken) return null;
+
+    const auth = getAdminAuth();
+    const decoded = await auth.verifyIdToken(idToken);
+    return decoded;
+  } catch (err) {
+    console.warn('[Auth] Token verification failed:', err.message);
+    return null;
   }
-  return dbInstance;
 }

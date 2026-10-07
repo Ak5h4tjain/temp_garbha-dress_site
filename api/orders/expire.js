@@ -4,10 +4,11 @@
  * ==========================================================================
  * Automatically sweeps unverified pending orders whose 30-minute payment window
  * has elapsed, marks them 'expired', and releases inventory reservations.
+ * Uses Firebase Admin SDK with safe product document IDs.
  */
 
-import { collection, query, where, getDocs, doc, updateDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { getDb } from '../_firebase.js';
+import { getDb, FieldValue } from '../_firebase.js';
+import { getProductDocId } from '../_catalog.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -22,13 +23,11 @@ export default async function handler(req, res) {
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
 
-    // Query pending orders
-    const pendingQuery = query(
-      collection(db, 'orders'),
-      where('status', '==', 'pending_payment')
-    );
+    // Query pending orders via Admin SDK
+    const snap = await db.collection('orders')
+      .where('status', '==', 'pending_payment')
+      .get();
 
-    const snap = await getDocs(pendingQuery);
     const expiredOrderIds = [];
 
     for (const orderDoc of snap.docs) {
@@ -36,18 +35,19 @@ export default async function handler(req, res) {
       if (order.expiresAt && new Date(order.expiresAt).getTime() <= nowMs) {
         const orderId = order.orderId;
         const dressCode = order.dressCode;
+        const prodDocId = getProductDocId(dressCode);
 
         try {
-          await runTransaction(db, async (transaction) => {
-            const productRef = doc(db, 'products', dressCode);
+          await db.runTransaction(async (transaction) => {
+            const productRef = db.collection('products').doc(prodDocId);
             const prodSnap = await transaction.get(productRef);
 
-            if (prodSnap.exists()) {
+            if (prodSnap.exists) {
               const prodData = prodSnap.data();
               const remainingBookings = (prodData.activeBookings || []).filter(b => b.orderId !== orderId);
               const updateFields = {
                 activeBookings: remainingBookings,
-                updatedAt: serverTimestamp()
+                updatedAt: FieldValue.serverTimestamp()
               };
               if (order.orderType === 'BUY') {
                 updateFields.sold = false;
@@ -55,12 +55,12 @@ export default async function handler(req, res) {
               transaction.set(productRef, updateFields, { merge: true });
             }
 
-            const oRef = doc(db, 'orders', orderId);
+            const oRef = db.collection('orders').doc(orderId);
             transaction.update(oRef, {
               status: 'expired',
               paymentStatus: 'expired',
               expiredAt: nowIso,
-              updatedAt: serverTimestamp()
+              updatedAt: FieldValue.serverTimestamp()
             });
           });
 

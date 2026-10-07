@@ -91,17 +91,15 @@ service cloud.firestore {
       // Customer can read their own orders; Seller can read all orders
       allow read: if isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid);
 
-      // Order creation: Sellers can create any order; authenticated or guest users can create pending order
-      allow create: if isSeller() || (
-        isValidNewOrder(request.resource.data) &&
-        (isSignedIn() ? request.resource.data.customerUid == request.auth.uid : request.resource.data.customerUid.matches('guest_.*'))
-      );
+      // Order creation: Delegated strictly to trusted server endpoint / sellers
+      allow create: if isSeller();
 
       // Customer can ONLY update utrNumber and set status to 'payment_submitted' / 'Payment Submitted'
       // Customer is STRICTLY FORBIDDEN from altering totalPayable, dressCode, or rental dates!
       allow update: if 
-        // Case A: Customer submitting 12-digit UTR Transaction ID
-        (resource.data.status in ['Pending Payment', 'pending_payment'] &&
+        // Case A: Customer submitting 12-digit UTR Transaction ID for their own order
+        ((isSeller() || (isSignedIn() && resource.data.customerUid == request.auth.uid) || resource.data.customerUid.matches('guest_.*')) &&
+         resource.data.status in ['Pending Payment', 'pending_payment'] &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['utrNumber', 'status', 'paymentStatus', 'utrSubmittedAt', 'updatedAt']) &&
          request.resource.data.status in ['Payment Submitted', 'payment_submitted'] &&
          isValidString(request.resource.data.utrNumber, 10, 20))

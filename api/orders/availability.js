@@ -3,12 +3,10 @@
  * REAL-TIME AVAILABILITY & INVENTORY QUERY (/api/orders/availability)
  * ==========================================================================
  * Single source of truth for rental calendar clashes & sold outfits.
- * Replaces old Apps Script doGet entirely!
+ * Uses Firebase Admin SDK with safe document IDs.
  */
 
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { getDb } from '../_firebase.js';
-import { OFFICIAL_CATALOG } from '../_catalog.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -30,8 +28,8 @@ export default async function handler(req, res) {
     const bookedDatesByDress = {};
     const soldDresses = [];
 
-    // Query Firestore products collection
-    const productsSnap = await getDocs(collection(db, 'products'));
+    // Query Firestore products collection via Admin SDK
+    const productsSnap = await db.collection('products').get();
 
     productsSnap.forEach(docSnap => {
       const data = docSnap.data();
@@ -45,8 +43,11 @@ export default async function handler(req, res) {
       const bookings = data.activeBookings || [];
 
       for (const b of bookings) {
-        // Only active/confirmed or non-expired pending bookings block the calendar
-        if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || (b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired')) {
+        // Active/confirmed bookings, holding 'payment_submitted', or non-expired pending bookings block the calendar
+        const isHolding = b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted';
+        const isNonExpiredPending = b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired';
+
+        if (isHolding || isNonExpiredPending) {
           if (b.startDate && b.endDate) {
             const curr = new Date(b.startDate + 'T00:00:00Z');
             const end = new Date(b.endDate + 'T00:00:00Z');

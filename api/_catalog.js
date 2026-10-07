@@ -170,3 +170,11 @@ export function getBookedDateList(startStr, endStr) {
 export function checkDateOverlap(startA, endA, startB, endB) {
   return !(endA < startB || startA > endB);
 }
+
+/**
+ * Converts catalog codes containing slashes (e.g. "032026/2101") into safe Firestore document IDs (e.g. "032026_2101").
+ */
+export function getProductDocId(code) {
+  return String(code || '').trim().replace(/\//g, '_');
+}
+

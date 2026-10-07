@@ -21,11 +21,18 @@ export async function sendTelegramNotification(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
-        parse_mode: 'Markdown'
+        text
       })
     });
-    const data = await res.json();
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok || !data || data.ok !== true) {
+      const errMsg = data?.description || `HTTP ${res.status} ${res.statusText}`;
+      console.warn('[Telegram] Notification send failed:', errMsg);
+      return { success: false, error: errMsg };
+    }
+
     return { success: true, data };
   } catch (err) {
     console.warn('[Telegram] Notification failed (non-fatal):', err.message || err);

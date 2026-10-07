@@ -255,6 +255,13 @@ export const OFFICIAL_PRICING_MAP = PRODUCTS.reduce((acc, p) => {
   return acc;
 }, {});
 
+/**
+ * Converts catalog codes containing slashes into safe Firestore document IDs.
+ */
+export function getProductDocId(code) {
+  return String(code || '').trim().replace(/\//g, '_');
+}
+
 export const SELLER_ADMIN_EMAIL = 'admin@kissa.in';
 
 export const isSellerEmail = (email) => {
@@ -491,7 +498,9 @@ export async function fetchLiveAvailability() {
 
         const validDates = new Set();
         for (const b of (data.activeBookings || [])) {
-          if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || (b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired')) {
+          const isHolding = b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted';
+          const isNonExpiredPending = b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired';
+          if (isHolding || isNonExpiredPending) {
             if (b.startDate && b.endDate) {
               const curr = new Date(b.startDate + 'T00:00:00Z');
               const end = new Date(b.endDate + 'T00:00:00Z');
@@ -557,11 +566,23 @@ export async function createOrderInFirestore(orderInput, currentUser, idempotenc
     idempotencyKey: idKey
   };
 
+  // Pass current Firebase ID token if user is signed in
+  let authHeader = null;
+  if (auth && auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      authHeader = 'Bearer ' + token;
+    } catch (_) {}
+  }
+
   // Primary: Serverless Backend with Transaction & Price Calculation
   try {
     const apiRes = await fetch('/api/orders/create', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authHeader ? { 'Authorization': authHeader } : {})
+      },
       body: JSON.stringify(payload)
     });
 
@@ -616,23 +637,24 @@ export async function createOrderInFirestore(orderInput, currentUser, idempotenc
   const orderId = 'ORD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
   const nowMs = Date.now();
   const expirationIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
+  const prodDocId = getProductDocId(dressCode);
 
   let finalOrderDoc = null;
 
   await runTransaction(db, async (transaction) => {
-    const prodRef = doc(db, 'products', dressCode);
+    const prodRef = doc(db, 'products', prodDocId);
     const prodSnap = await transaction.get(prodRef);
 
     let prodData = prodSnap.exists()
       ? prodSnap.data()
-      : { ...catalogItem, activeBookings: [], sold: false };
+      : { ...catalogItem, code: dressCode, activeBookings: [], sold: false };
 
     if (orderType === 'BUY') {
       if (prodData.sold === true) throw new Error('Outfit already sold.');
       prodData.sold = true;
     } else {
       const currentBookings = (prodData.activeBookings || []).filter(b => {
-        if (b.status === 'confirmed' || b.status === 'Verified & Dispatched') return true;
+        if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted') return true;
         return b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired';
       });
 
@@ -699,27 +721,66 @@ export async function submitOrderUtr(orderId, rawUtr) {
     throw new Error('Please enter a valid 12-digit UPI Reference / UTR Number.');
   }
 
+  let authHeader = null;
+  if (auth && auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      authHeader = 'Bearer ' + token;
+    } catch (_) {}
+  }
+
   // 1. Try serverless backend
   try {
     const apiRes = await fetch('/api/orders/submit-utr', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authHeader ? { 'Authorization': authHeader } : {})
+      },
       body: JSON.stringify({ orderId, utrNumber: cleanUtr })
     });
+
     if (apiRes.ok) {
       const data = await apiRes.json();
       if (data.success) {
         return { orderId, utrNumber: cleanUtr, status: 'payment_submitted' };
       }
+    } else if (apiRes.status >= 400 && apiRes.status < 500) {
+      // 4xx client errors must propagate immediately without fallback
+      const errData = await apiRes.json().catch(() => ({}));
+      throw new Error(errData.error || `Server rejected UTR submission (HTTP ${apiRes.status}).`);
     }
-  } catch (_) {}
+  } catch (err) {
+    if (err.message && !err.message.includes('fetch') && !err.message.includes('Network') && !err.message.includes('Failed to fetch')) {
+      throw err;
+    }
+    console.warn('Network issue reaching /api/orders/submit-utr, attempting Firestore fallback:', err.message);
+  }
 
-  // 2. Direct Firestore fallback
+  // 2. Direct Firestore fallback (network failure only)
   if (!db || !isFirebaseConfigured()) {
     throw new Error('Database is currently unreachable. Could not submit UTR.');
   }
 
   const orderRef = doc(db, 'orders', orderId);
+  const oSnap = await getDoc(orderRef);
+  if (oSnap.exists()) {
+    const oData = oSnap.data();
+    if (oData.dressCode) {
+      const prodRef = doc(db, 'products', getProductDocId(oData.dressCode));
+      const pSnap = await getDoc(prodRef);
+      if (pSnap.exists()) {
+        const bookings = (pSnap.data().activeBookings || []).map(b => {
+          if (b.orderId === orderId) {
+            return { ...b, status: 'payment_submitted', utrNumber: cleanUtr };
+          }
+          return b;
+        });
+        await updateDoc(prodRef, { activeBookings: bookings, updatedAt: serverTimestamp() }).catch(() => {});
+      }
+    }
+  }
+
   await updateDoc(orderRef, {
     utrNumber: cleanUtr,
     status: 'Payment Submitted',
@@ -737,29 +798,50 @@ export async function submitOrderUtr(orderId, rawUtr) {
 export async function verifyAndDispatchOrder(order) {
   const orderId = order.orderId;
 
+  let authHeader = null;
+  if (auth && auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      authHeader = 'Bearer ' + token;
+    } catch (_) {}
+  }
+
   // 1. Try serverless backend
   try {
     const res = await fetch('/api/admin/action', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authHeader ? { 'Authorization': authHeader } : {})
+      },
       body: JSON.stringify({ action: 'verify_and_dispatch', orderId })
     });
+
     if (res.ok) {
       const data = await res.json();
       if (data.whatsappUrl) {
         window.open(data.whatsappUrl, '_blank');
         return { success: true, whatsappUrl: data.whatsappUrl };
       }
+    } else if (res.status >= 400 && res.status < 500) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Admin action rejected (HTTP ${res.status}).`);
     }
-  } catch (_) {}
+  } catch (err) {
+    if (err.message && !err.message.includes('fetch') && !err.message.includes('Network') && !err.message.includes('Failed to fetch')) {
+      throw err;
+    }
+  }
 
   // 2. Direct Firestore Transaction Fallback
   if (!db || !isFirebaseConfigured()) {
     throw new Error('Firestore connection is required for seller verification.');
   }
 
+  const prodDocId = getProductDocId(order.dressCode);
+
   await runTransaction(db, async (transaction) => {
-    const prodRef = doc(db, 'products', order.dressCode);
+    const prodRef = doc(db, 'products', prodDocId);
     const prodSnap = await transaction.get(prodRef);
     if (prodSnap.exists()) {
       const bookings = (prodSnap.data().activeBookings || []).map(b => {
@@ -797,29 +879,50 @@ export async function verifyAndDispatchOrder(order) {
 export async function returnAndRestockOrder(order) {
   const orderId = order.orderId;
 
+  let authHeader = null;
+  if (auth && auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      authHeader = 'Bearer ' + token;
+    } catch (_) {}
+  }
+
   // 1. Try serverless backend
   try {
     const res = await fetch('/api/admin/action', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authHeader ? { 'Authorization': authHeader } : {})
+      },
       body: JSON.stringify({ action: 'return_and_restock', orderId })
     });
+
     if (res.ok) {
       const data = await res.json();
       if (data.whatsappUrl) {
         window.open(data.whatsappUrl, '_blank');
         return { success: true, whatsappUrl: data.whatsappUrl };
       }
+    } else if (res.status >= 400 && res.status < 500) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Admin action rejected (HTTP ${res.status}).`);
     }
-  } catch (_) {}
+  } catch (err) {
+    if (err.message && !err.message.includes('fetch') && !err.message.includes('Network') && !err.message.includes('Failed to fetch')) {
+      throw err;
+    }
+  }
 
   // 2. Direct Firestore Transaction Fallback
   if (!db || !isFirebaseConfigured()) {
     throw new Error('Firestore connection is required for returning and restocking.');
   }
 
+  const prodDocId = getProductDocId(order.dressCode);
+
   await runTransaction(db, async (transaction) => {
-    const prodRef = doc(db, 'products', order.dressCode);
+    const prodRef = doc(db, 'products', prodDocId);
     const prodSnap = await transaction.get(prodRef);
     if (prodSnap.exists()) {
       const remainingBookings = (prodSnap.data().activeBookings || []).filter(b => b.orderId !== orderId);

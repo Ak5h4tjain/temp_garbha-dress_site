@@ -3,17 +3,19 @@
  * SERVER-AUTHORITATIVE ORDER CREATION (/api/orders/create)
  * ==========================================================================
  * Enforces Zero-Trust Architecture:
- *  - Browser prices are completely ignored; price computed from Firestore catalog.
+ *  - Browser prices are completely ignored; price computed from authoritative catalog.
  *  - Atomic Firestore transaction prevents double-booking and concurrency races.
+ *  - Uses Firebase Admin SDK with service-account / cloud credentials.
+ *  - Safe document IDs via getProductDocId (preserves original slashes in product code).
+ *  - Derives customerUid from verified Firebase ID token if authenticated.
  *  - Enforces IST calendar constraints (max 15 days, no past dates).
  *  - Enforces idempotency via idempotencyKey.
  *  - Automatically sets 30-minute expiration timestamp.
- *  - Dispatches non-blocking Telegram notification.
+ *  - Dispatches Telegram notification safely without dangling unawaited promises.
  */
 
-import { doc, getDoc, getDocs, setDoc, query, collection, where, limit, runTransaction, serverTimestamp } from 'firebase/firestore';
-import { getDb } from '../_firebase.js';
-import { OFFICIAL_CATALOG, validateRentalDates, checkDateOverlap } from '../_catalog.js';
+import { getDb, FieldValue, verifyAuthToken } from '../_firebase.js';
+import { OFFICIAL_CATALOG, validateRentalDates, checkDateOverlap, getProductDocId } from '../_catalog.js';
 import { sendTelegramNotification } from '../_telegram.js';
 
 export default async function handler(req, res) {
@@ -53,6 +55,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: `Invalid dress code: "${dressCode}".` });
     }
 
+    const productDocId = getProductDocId(dressCode);
+
     // 2. Validate Customer Details
     const cleanName = String(customerName || '').trim();
     if (cleanName.length < 2 || cleanName.length > 100) {
@@ -72,14 +76,20 @@ export default async function handler(req, res) {
     const cleanCity = String(city || 'Indore').trim();
     const orderType = rawOrderType === 'BUY' ? 'BUY' : 'RENT';
 
-    // 3. Idempotency Check
+    // 3. Authenticate & derive customer UID from verified Firebase ID token if present
+    const decodedToken = await verifyAuthToken(req);
+    let customerUid = decodedToken ? decodedToken.uid : null;
+    if (!customerUid) {
+      customerUid = rawCustomerUid ? String(rawCustomerUid).trim() : 'guest_' + Date.now();
+    }
+
+    // 4. Idempotency Check
     if (idempotencyKey && typeof idempotencyKey === 'string' && idempotencyKey.length >= 8) {
-      const existingQuery = query(
-        collection(db, 'orders'),
-        where('idempotencyKey', '==', idempotencyKey.trim()),
-        limit(1)
-      );
-      const existingSnap = await getDocs(existingQuery);
+      const existingSnap = await db.collection('orders')
+        .where('idempotencyKey', '==', idempotencyKey.trim())
+        .limit(1)
+        .get();
+
       if (!existingSnap.empty) {
         const existingOrder = existingSnap.docs[0].data();
         return res.status(200).json({
@@ -90,30 +100,30 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4. Validate Rental Dates
+    // 5. Validate Rental Dates
     let rentalDays = 1;
     if (orderType === 'RENT') {
       const dateValidation = validateRentalDates(startDate, endDate);
       rentalDays = dateValidation.rentalDays;
     }
 
-    // 5. Generate Unique Order ID & Expiration (30 Minutes)
+    // 6. Generate Unique Order ID & Expiration (30 Minutes)
     const orderId = 'ORD-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
     const nowMs = Date.now();
     const expirationIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
-    const customerUid = String(rawCustomerUid || 'guest_' + Date.now()).trim();
 
     let createdOrderDoc = null;
 
-    // 6. ATOMIC FIRESTORE TRANSACTION (Concurrency & Anti-Collision Lock)
-    await runTransaction(db, async (transaction) => {
-      const productRef = doc(db, 'products', dressCode);
+    // 7. ATOMIC FIRESTORE TRANSACTION (Concurrency & Anti-Collision Lock via Admin SDK)
+    await db.runTransaction(async (transaction) => {
+      const productRef = db.collection('products').doc(productDocId);
       const productSnap = await transaction.get(productRef);
 
-      let productData = productSnap.exists()
+      let productData = productSnap.exists
         ? productSnap.data()
         : {
             ...catalogItem,
+            code: dressCode,
             activeBookings: [],
             sold: false,
             createdAt: new Date().toISOString()
@@ -132,17 +142,14 @@ export default async function handler(req, res) {
           throw new Error('This outfit has already been purchased and is no longer available for sale.');
         }
 
-        // Authoritative purchase calculation
         rentOrBuyAmount = Number(productData.buyPrice || catalogItem.buyPrice);
         securityDeposit = 0;
         totalPayable = rentOrBuyAmount;
 
-        // Mark as sold
         productData.sold = true;
         if (productData.totalStock) productData.totalStock = Math.max(0, productData.totalStock - 1);
 
       } else {
-        // Authoritative rental calculation
         const rentRate = Number(productData.rentPerDay || catalogItem.rentPerDay);
         const depositRate = Number(productData.securityDeposit || catalogItem.securityDeposit);
 
@@ -150,9 +157,11 @@ export default async function handler(req, res) {
         securityDeposit = depositRate;
         totalPayable = rentOrBuyAmount + securityDeposit;
 
-        // Prune expired or cancelled bookings from product's activeBookings list
+        // Prune expired or cancelled bookings; holding status 'payment_submitted' does not expire
         const currentBookings = (productData.activeBookings || []).filter(b => {
-          if (b.status === 'confirmed' || b.status === 'Verified & Dispatched') return true;
+          if (b.status === 'confirmed' || b.status === 'Verified & Dispatched' || b.status === 'payment_submitted') {
+            return true;
+          }
           if (b.expiresAt && new Date(b.expiresAt).getTime() > nowMs && b.status !== 'cancelled' && b.status !== 'expired') {
             return true;
           }
@@ -179,10 +188,11 @@ export default async function handler(req, res) {
         productData.activeBookings = currentBookings;
       }
 
-      // Update product document
+      // Update product document (preserving original code)
       transaction.set(productRef, {
         ...productData,
-        updatedAt: serverTimestamp()
+        code: dressCode,
+        updatedAt: FieldValue.serverTimestamp()
       }, { merge: true });
 
       // Create authoritative order document
@@ -215,25 +225,36 @@ export default async function handler(req, res) {
         returnedAt: null,
         expiresAt: expirationIso,
         createdAt: new Date().toISOString(),
-        timestamp: serverTimestamp()
+        timestamp: FieldValue.serverTimestamp()
       };
 
-      const orderRef = doc(db, 'orders', orderId);
+      const orderRef = db.collection('orders').doc(orderId);
       transaction.set(orderRef, createdOrderDoc);
     });
 
-    // 7. Non-blocking Telegram Notification
-    sendTelegramNotification(
-      `👑 *NEW KISSA ORDER REGISTERED*\n\n` +
-      `📋 *Order ID*: \`${orderId}\`\n` +
-      `👗 *Outfit*: ${createdOrderDoc.dressTitle} (\`${createdOrderDoc.dressCode}\`)\n` +
-      `🏷️ *Type*: ${orderType === 'RENT' ? 'RENT (' + rentalDays + ' Days)' : 'BUY (Outright Purchase)'}\n` +
-      `${orderType === 'RENT' ? '📅 *Dates*: ' + startDate + ' to ' + endDate + '\n' : ''}` +
-      `👤 *Customer*: ${cleanName} (\`${cleanPhone}\`)\n` +
-      `📍 *City*: ${cleanCity}\n` +
-      `💰 *Total Amount*: ₹${createdOrderDoc.totalPayable.toLocaleString('en-IN')}\n` +
-      `⏳ *Status*: Pending Payment (Expires in 30 mins)`
-    ).catch(() => {});
+    // 8. Dispatch Telegram Notification safely without leaving unawaited pending promises
+    const notifText =
+      `👑 NEW KISSA ORDER REGISTERED\n\n` +
+      `Order ID: ${orderId}\n` +
+      `Outfit: ${createdOrderDoc.dressTitle} (${createdOrderDoc.dressCode})\n` +
+      `Type: ${orderType === 'RENT' ? 'RENT (' + rentalDays + ' Days)' : 'BUY (Outright Purchase)'}\n` +
+      `${orderType === 'RENT' ? 'Dates: ' + startDate + ' to ' + endDate + '\n' : ''}` +
+      `Customer: ${cleanName} (${cleanPhone})\n` +
+      `City: ${cleanCity}\n` +
+      `Total Amount: ₹${createdOrderDoc.totalPayable.toLocaleString('en-IN')}\n` +
+      `Status: Pending Payment (Expires in 30 mins)`;
+
+    const telegramPromise = sendTelegramNotification(notifText);
+    try {
+      if (typeof req.waitUntil === 'function') {
+        req.waitUntil(telegramPromise);
+      } else {
+        await Promise.race([
+          telegramPromise,
+          new Promise(resolve => setTimeout(resolve, 800))
+        ]);
+      }
+    } catch (_) {}
 
     return res.status(201).json({
       success: true,
