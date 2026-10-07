@@ -141,25 +141,42 @@ cd temp_garbha-dress_site
 
 ---
 
-### Step 5: Deploy the Storefront (100% Free Hosting)
+### Step 5: Make Your Site Publicly Available (100% Free Hosting)
 
-Choose any of the following free hosting providers:
+Deploy your storefront in under 60 seconds with free global CDN and automatic SSL certificate (`https://`):
 
-#### Option A: Vercel (Fastest & Recommended)
-1. Go to [vercel.com](https://vercel.com) and log in with GitHub.
-2. Click **Add New Project** ➔ Import `temp_garbha-dress_site`.
-3. Click **Deploy**. Your site will be live with free global SSL in 20 seconds.
+#### 🚀 Option A: Vercel (Recommended — Automatic Updates on Git Push)
+1. Go to [vercel.com](https://vercel.com) and log in with your GitHub account.
+2. Click **Add New...** ➔ **Project**.
+3. Locate `temp_garbha-dress_site` in the list and click **Import**.
+4. Leave all build settings at default (`Other / Static Site`).
+5. Click **Deploy**.
+6. 🎉 **Done!** Your site is live at `https://temp-garbha-dress-site.vercel.app` (or custom name).
+7. Every time you push changes to GitHub, Vercel updates your live site automatically!
 
-#### Option B: Netlify (Drag & Drop)
+#### 📦 Option B: Netlify (Instant Drag & Drop)
 1. Go to [app.netlify.com/drop](https://app.netlify.com/drop).
-2. Drag and drop this project folder.
+2. Drag and drop the `temp-ecom-web` folder into the browser window.
 3. Your site will instantly go live at `https://<site-name>.netlify.app`.
+4. (Optional) Go to **Site Configuration** ➔ **Change site name** to choose a custom name like `kissa-festive-rentals.netlify.app`.
 
-#### Option C: GitHub Pages
-1. Go to your repository on GitHub.
-2. Click **Settings** ➔ **Pages**.
-3. Under **Build and deployment** ➔ **Branch**, select `main` and root `/` ➔ Click **Save**.
-4. Your website will be live at `https://Ak5h4tjain.github.io/temp_garbha-dress_site/`.
+#### 🐙 Option C: GitHub Pages
+1. Go to your repository on GitHub: `https://github.com/Ak5h4tjain/temp_garbha-dress_site`.
+2. Click **Settings** (top tab) ➔ **Pages** (left sidebar).
+3. Under **Build and deployment** ➔ **Branch**:
+   - Select `main`
+   - Select `/ (root)`
+4. Click **Save**.
+5. In 1 minute, your site will be accessible at:
+   `https://Ak5h4tjain.github.io/temp_garbha-dress_site/`
+
+---
+
+### 🌐 Connecting a Custom Domain (e.g., `kissa.in` or `kissagarbha.com`)
+If you buy a domain on GoDaddy, Namecheap, or Hostinger:
+1. In Vercel: Go to your project ➔ **Settings** ➔ **Domains** ➔ Add `kissa.in`.
+2. Copy the DNS CNAME record shown by Vercel and paste it into your domain registrar's DNS management.
+3. Free SSL certificate is generated automatically within 5 minutes.
 
 ---
 
