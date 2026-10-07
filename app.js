@@ -66,7 +66,25 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   prefetchInventoryAvailability();
   initializeAuthAndOrderStreams();
+  enforceAccessibleLabels();
 });
+
+// A11y Guard: Ensure all tooltip buttons (native & injected) have discernible labels
+function enforceAccessibleLabels() {
+  const patch = () => {
+    document.querySelectorAll('button[data-tooltip]:not([aria-label]), a[data-tooltip]:not([aria-label])').forEach(el => {
+      const label = el.getAttribute('data-tooltip');
+      if (label && label.trim()) {
+        el.setAttribute('aria-label', label.trim());
+      }
+    });
+  };
+  patch();
+  try {
+    const obs = new MutationObserver(patch);
+    obs.observe(document.body, { childList: true, subtree: true });
+  } catch (_) {}
+}
 
 // --------------------------------------------------------------------------
 // SECURITY & FORMATTING HELPERS
