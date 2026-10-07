@@ -44,14 +44,58 @@ let hasAdminAppInitialized = false;
 let isAdminInitScheduled = false;
 let adminDomObserver = null;
 let adminFallbackTimer = null;
-let hasAdminAuthSetup = false;
-let hasDashboardControlsSetup = false;
+let hasAuthSubscriptionStarted = false;
+
+let adminGatekeeperEl = null;
+let adminDashboardEl = null;
+let adminEmailDisplayEl = null;
+
+function refreshAdminAuthReferences() {
+  adminGatekeeperEl = document.getElementById('adminGatekeeper');
+  adminDashboardEl = document.getElementById('adminDashboard');
+  adminEmailDisplayEl = document.getElementById('adminUserEmailDisplay');
+}
+
+function applyAuthStateUI(user = state.currentUser) {
+  refreshAdminAuthReferences();
+  const isSeller = isSellerUser(user);
+
+  if (isSeller) {
+    // Unlocked Admin View
+    if (adminGatekeeperEl) adminGatekeeperEl.style.display = 'none';
+    if (adminDashboardEl) adminDashboardEl.style.display = 'flex';
+    if (adminEmailDisplayEl) adminEmailDisplayEl.textContent = user?.email || SELLER_ADMIN_EMAIL;
+
+    // Connect real-time orders feed
+    if (!state.ordersUnsubscribe) {
+      state.ordersUnsubscribe = subscribeToAllOrders((orders) => {
+        state.orders = orders || [];
+        updateKpiMetrics();
+        renderOrdersFeed();
+      });
+    }
+  } else {
+    // Locked Gatekeeper View
+    if (adminGatekeeperEl) adminGatekeeperEl.style.display = 'flex';
+    if (adminDashboardEl) adminDashboardEl.style.display = 'none';
+
+    if (state.ordersUnsubscribe) {
+      state.ordersUnsubscribe();
+      state.ordersUnsubscribe = null;
+    }
+  }
+}
 
 function initAdminApp({ force = false } = {}) {
   const gatekeeper = document.getElementById('adminGatekeeper');
 
-  // If already initialized, never re-run setup
+  // If already initialized, handle admin UI elements inserted afterward
   if (hasAdminAppInitialized) {
+    if (gatekeeper || document.getElementById('adminDashboard')) {
+      setupAdminAuth();
+      setupDashboardControls();
+      applyAuthStateUI(state.currentUser);
+    }
     return;
   }
 
@@ -61,15 +105,27 @@ function initAdminApp({ force = false } = {}) {
       isAdminInitScheduled = true;
 
       const onAdminTargetReady = ({ force: shouldForce = false } = {}) => {
-        if (adminDomObserver) {
-          adminDomObserver.disconnect();
-          adminDomObserver = null;
-        }
         if (adminFallbackTimer) {
           clearTimeout(adminFallbackTimer);
           adminFallbackTimer = null;
         }
+
+        const currentGatekeeper = document.getElementById('adminGatekeeper');
+        if (currentGatekeeper && adminDomObserver) {
+          adminDomObserver.disconnect();
+          adminDomObserver = null;
+        }
+
         isAdminInitScheduled = false;
+
+        if (hasAdminAppInitialized) {
+          // Handle admin UI elements inserted afterward: retry setups, refresh references, apply auth state
+          setupAdminAuth();
+          setupDashboardControls();
+          applyAuthStateUI(state.currentUser);
+          return;
+        }
+
         initAdminApp({ force: shouldForce });
       };
 
@@ -80,7 +136,7 @@ function initAdminApp({ force = false } = {}) {
       const rootTarget = document.body || document.documentElement;
       if (rootTarget && typeof MutationObserver !== 'undefined') {
         adminDomObserver = new MutationObserver(() => {
-          if (document.getElementById('adminGatekeeper')) {
+          if (document.getElementById('adminGatekeeper') || document.getElementById('adminDashboard')) {
             onAdminTargetReady();
           }
         });
@@ -96,7 +152,7 @@ function initAdminApp({ force = false } = {}) {
   }
 
   // Clean up any pending scheduling guards & observers
-  if (adminDomObserver) {
+  if (gatekeeper && adminDomObserver) {
     adminDomObserver.disconnect();
     adminDomObserver = null;
   }
@@ -111,6 +167,23 @@ function initAdminApp({ force = false } = {}) {
 
   setupAdminAuth();
   setupDashboardControls();
+  applyAuthStateUI(state.currentUser);
+
+  // If admin elements were missing during forced init, observe for late injection
+  if (!gatekeeper && typeof MutationObserver !== 'undefined' && !adminDomObserver) {
+    const lateObserver = new MutationObserver(() => {
+      if (document.getElementById('adminGatekeeper') || document.getElementById('adminDashboard')) {
+        lateObserver.disconnect();
+        setupAdminAuth();
+        setupDashboardControls();
+        applyAuthStateUI(state.currentUser);
+      }
+    });
+    const root = document.body || document.documentElement;
+    if (root) {
+      lateObserver.observe(root, { childList: true, subtree: true });
+    }
+  }
 }
 
 if (document.readyState === 'loading') {
@@ -141,49 +214,23 @@ function formatCurrency(amount) {
 // ADMIN AUTHENTICATION GATEKEEPER
 // --------------------------------------------------------------------------
 function setupAdminAuth() {
-  if (hasAdminAuthSetup) return;
-  hasAdminAuthSetup = true;
-
-  const gatekeeper = document.getElementById('adminGatekeeper');
-  const dashboard = document.getElementById('adminDashboard');
+  refreshAdminAuthReferences();
   const loginForm = document.getElementById('adminLoginForm');
   const googleBtn = document.getElementById('adminGoogleBtn');
   const logoutBtn = document.getElementById('adminLogoutBtn');
-  const emailDisplay = document.getElementById('adminUserEmailDisplay');
 
   // Listen to Auth State
-  subscribeToAuthState((user) => {
-    state.currentUser = user;
-    const isSeller = isSellerUser(user);
-
-    if (isSeller) {
-      // Unlocked Admin View
-      if (gatekeeper) gatekeeper.style.display = 'none';
-      if (dashboard) dashboard.style.display = 'flex';
-      if (emailDisplay) emailDisplay.textContent = user.email || SELLER_ADMIN_EMAIL;
-
-      // Connect real-time orders feed
-      if (!state.ordersUnsubscribe) {
-        state.ordersUnsubscribe = subscribeToAllOrders((orders) => {
-          state.orders = orders || [];
-          updateKpiMetrics();
-          renderOrdersFeed();
-        });
-      }
-    } else {
-      // Locked Gatekeeper View
-      if (gatekeeper) gatekeeper.style.display = 'flex';
-      if (dashboard) dashboard.style.display = 'none';
-
-      if (state.ordersUnsubscribe) {
-        state.ordersUnsubscribe();
-        state.ordersUnsubscribe = null;
-      }
-    }
-  });
+  if (!hasAuthSubscriptionStarted) {
+    hasAuthSubscriptionStarted = true;
+    subscribeToAuthState((user) => {
+      state.currentUser = user;
+      applyAuthStateUI(user);
+    });
+  }
 
   // Email & Password Form Submit
-  if (loginForm) {
+  if (loginForm && !loginForm.dataset.listenerAttached) {
+    loginForm.dataset.listenerAttached = 'true';
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const emailInput = document.getElementById('adminEmail');
@@ -225,7 +272,8 @@ function setupAdminAuth() {
   }
 
   // Google Sign-In
-  if (googleBtn) {
+  if (googleBtn && !googleBtn.dataset.listenerAttached) {
+    googleBtn.dataset.listenerAttached = 'true';
     googleBtn.addEventListener('click', async () => {
       try {
         const user = await loginWithGoogle();
@@ -244,7 +292,8 @@ function setupAdminAuth() {
   }
 
   // Logout Button
-  if (logoutBtn) {
+  if (logoutBtn && !logoutBtn.dataset.listenerAttached) {
+    logoutBtn.dataset.listenerAttached = 'true';
     logoutBtn.addEventListener('click', async () => {
       await logoutUser();
       state.currentUser = null;
@@ -258,8 +307,6 @@ function setupAdminAuth() {
 // DASHBOARD CONTROLS (TABS, SEARCH, REFRESH)
 // --------------------------------------------------------------------------
 function setupDashboardControls() {
-  if (hasDashboardControlsSetup) return;
-  hasDashboardControlsSetup = true;
   const tabs = document.querySelectorAll('.admin-tab');
   const searchInput = document.getElementById('adminSearchInput');
   const refreshBtn = document.getElementById('adminRefreshBtn');
@@ -267,16 +314,20 @@ function setupDashboardControls() {
 
   // Tab Filtering
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      state.activeFilter = tab.dataset.filter;
-      renderOrdersFeed();
-    });
+    if (!tab.dataset.listenerAttached) {
+      tab.dataset.listenerAttached = 'true';
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        state.activeFilter = tab.dataset.filter;
+        renderOrdersFeed();
+      });
+    }
   });
 
   // Search Filtering
-  if (searchInput) {
+  if (searchInput && !searchInput.dataset.listenerAttached) {
+    searchInput.dataset.listenerAttached = 'true';
     searchInput.addEventListener('input', (e) => {
       state.searchQuery = e.target.value.toLowerCase().trim();
       renderOrdersFeed();
@@ -284,7 +335,8 @@ function setupDashboardControls() {
   }
 
   // Manual Refresh
-  if (refreshBtn) {
+  if (refreshBtn && !refreshBtn.dataset.listenerAttached) {
+    refreshBtn.dataset.listenerAttached = 'true';
     refreshBtn.addEventListener('click', () => {
       renderOrdersFeed();
       updateKpiMetrics();
@@ -293,7 +345,8 @@ function setupDashboardControls() {
   }
 
   // Order Action Clicks (Delegated)
-  if (ordersFeed) {
+  if (ordersFeed && !ordersFeed.dataset.listenerAttached) {
+    ordersFeed.dataset.listenerAttached = 'true';
     ordersFeed.addEventListener('click', async (e) => {
       // 1. Copy 12-Digit UTR
       const copyBtn = e.target.closest('.admin-copy-utr-btn');

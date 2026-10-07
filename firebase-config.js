@@ -203,7 +203,11 @@ if (isLocalEnv || !isExplicitProduction) {
     const localModule = await import('./firebase-credentials.js');
     if (isLocalEnv && typeof localModule?.offlineAdminKey === 'string') {
       const trimmedKey = localModule.offlineAdminKey.trim();
-      if (trimmedKey.length > 0) {
+      if (
+        trimmedKey.length > 0 &&
+        trimmedKey !== 'YOUR_SECURE_LOCAL_DEV_OFFLINE_KEY' &&
+        !trimmedKey.includes('YOUR_')
+      ) {
         localOfflineAdminKey = trimmedKey;
       }
     }

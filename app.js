@@ -70,14 +70,32 @@ let customerFallbackTimer = null;
 let hasEventListenersSetup = false;
 let hasAuthAndOrderStreamsInitialized = false;
 
+function bindProductGridListener(gridEl = document.getElementById('productGrid')) {
+  if (!gridEl || gridEl.dataset.bookingListenerAttached === 'true') return;
+  gridEl.dataset.bookingListenerAttached = 'true';
+  gridEl.addEventListener('click', (e) => {
+    const bookBtn = e.target.closest('[data-action="book"]');
+    if (bookBtn && !bookBtn.disabled) {
+      const code = bookBtn.dataset.code;
+      const product = PRODUCTS.find(p => p.code === code);
+      if (product) {
+        openBookingModal(product);
+      }
+    }
+  });
+}
+
 function initCustomerApp({ force = false } = {}) {
   const productGrid = document.getElementById('productGrid');
 
   // If already initialized, handle late #productGrid insertion without duplicating listeners
   if (hasCustomerAppInitialized) {
-    if (productGrid && !productGrid.dataset.rendered) {
-      productGrid.dataset.rendered = 'true';
-      renderProductGrid();
+    if (productGrid) {
+      if (!productGrid.dataset.rendered) {
+        productGrid.dataset.rendered = 'true';
+        renderProductGrid();
+      }
+      bindProductGridListener(productGrid);
     }
     return;
   }
@@ -88,15 +106,30 @@ function initCustomerApp({ force = false } = {}) {
       isCustomerInitScheduled = true;
 
       const onTargetReady = ({ force: shouldForce = false } = {}) => {
-        if (customerDomObserver) {
-          customerDomObserver.disconnect();
-          customerDomObserver = null;
-        }
         if (customerFallbackTimer) {
           clearTimeout(customerFallbackTimer);
           customerFallbackTimer = null;
         }
+
+        const grid = document.getElementById('productGrid');
+        if (grid && customerDomObserver) {
+          customerDomObserver.disconnect();
+          customerDomObserver = null;
+        }
+
         isCustomerInitScheduled = false;
+
+        if (hasCustomerAppInitialized) {
+          if (grid) {
+            if (!grid.dataset.rendered) {
+              grid.dataset.rendered = 'true';
+              renderProductGrid();
+            }
+            bindProductGridListener(grid);
+          }
+          return;
+        }
+
         initCustomerApp({ force: shouldForce });
       };
 
@@ -126,7 +159,7 @@ function initCustomerApp({ force = false } = {}) {
   }
 
   // Clean up any pending scheduling guards & observers
-  if (customerDomObserver) {
+  if (productGrid && customerDomObserver) {
     customerDomObserver.disconnect();
     customerDomObserver = null;
   }
@@ -142,6 +175,7 @@ function initCustomerApp({ force = false } = {}) {
   if (productGrid) {
     productGrid.dataset.rendered = 'true';
     renderProductGrid();
+    bindProductGridListener(productGrid);
   }
   setupEventListeners();
   prefetchInventoryAvailability();
@@ -152,10 +186,13 @@ function initCustomerApp({ force = false } = {}) {
   if (!productGrid && typeof MutationObserver !== 'undefined') {
     const lateObserver = new MutationObserver(() => {
       const lateGrid = document.getElementById('productGrid');
-      if (lateGrid && !lateGrid.dataset.rendered) {
+      if (lateGrid) {
         lateObserver.disconnect();
-        lateGrid.dataset.rendered = 'true';
-        renderProductGrid();
+        if (!lateGrid.dataset.rendered) {
+          lateGrid.dataset.rendered = 'true';
+          renderProductGrid();
+        }
+        bindProductGridListener(lateGrid);
       }
     });
     const root = document.body || document.documentElement;
@@ -415,19 +452,7 @@ function setupEventListeners() {
   }
 
   // Open Booking Modal Delegate
-  const gridEl = document.getElementById('productGrid');
-  if (gridEl) {
-    gridEl.addEventListener('click', (e) => {
-      const bookBtn = e.target.closest('[data-action="book"]');
-      if (bookBtn && !bookBtn.disabled) {
-        const code = bookBtn.dataset.code;
-        const product = PRODUCTS.find(p => p.code === code);
-        if (product) {
-          openBookingModal(product);
-        }
-      }
-    });
-  }
+  bindProductGridListener();
 
   // Booking Modal Close
   const modalBackdrop = document.getElementById('bookingModalBackdrop');
